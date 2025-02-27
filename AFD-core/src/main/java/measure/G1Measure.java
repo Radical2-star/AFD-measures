@@ -4,11 +4,11 @@ import model.DataSet;
 import model.FunctionalDependency;
 
 /**
- * @ClassName G1Measure
- * @Description
- * @Author Zuoxing Xie
+ *  G1Measure
+ *
+ * @author Hoshi
  * @Time 2025/2/26
- * @Version 1.0
+ * @version 1.0
  */
 public class G1Measure implements ErrorMeasure {
     @Override

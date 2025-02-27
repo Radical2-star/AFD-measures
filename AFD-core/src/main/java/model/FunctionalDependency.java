@@ -6,11 +6,11 @@ import java.util.Objects;
 import java.util.Set;
 
 /**
- * @ClassName FD
- * @Description
- * @Author Zuoxing Xie
- * @Time 2025/2/26
- * @Version 1.0
+ *  FD
+ * 
+ * @author Hoshi
+ * @version 1.0
+ * @since 2025/2/26
  */
 public class FunctionalDependency {
     private final Set<Integer> lhs;

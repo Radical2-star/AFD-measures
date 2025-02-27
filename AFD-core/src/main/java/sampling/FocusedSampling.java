@@ -6,11 +6,11 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * @ClassName FocusedSampling
- * @Description
- * @Author Zuoxing Xie
- * @Time 2025/2/26
- * @Version 1.0
+ *  FocusedSampling
+ * 
+ * @author Hoshi
+ * @version 1.0
+ * @since 2025/2/26
  */
 public class FocusedSampling implements SamplingStrategy {
     @Override

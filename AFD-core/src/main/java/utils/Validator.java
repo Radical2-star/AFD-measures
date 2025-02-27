@@ -9,11 +9,11 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
- * @ClassName Validator
- * @Description
- * @Author Zuoxing Xie
- * @Time 2025/2/26
- * @Version 1.0
+ *  Validator
+ * 
+ * @author Hoshi
+ * @version 1.0
+ * @since 2025/2/26
  */
 public class Validator {
     /**

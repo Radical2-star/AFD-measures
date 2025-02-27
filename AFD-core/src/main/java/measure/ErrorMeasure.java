@@ -4,9 +4,9 @@ import model.DataSet;
 import model.FunctionalDependency;
 
 /**
- * @ClassName AbstractMeasure
+ *  AbstractMeasure
  * @Description
- * @Author Zuoxing Xie
+ * @Author Hoshi
  * @Time 2025/2/26 
  * @Version 1.0
  */

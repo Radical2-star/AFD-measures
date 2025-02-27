@@ -4,11 +4,11 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * @ClassName DataSet
- * @Description
- * @Author Zuoxing Xie
- * @Time 2025/2/26
- * @Version 1.0
+ *  DataSet
+ * 
+ * @author Hoshi
+ * @version 1.0
+ * @since 2025/2/26
  */
 public class DataSet {
     private final List<String> attributes;
