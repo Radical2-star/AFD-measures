@@ -7,8 +7,8 @@ import model.FunctionalDependency;
  *  G1Measure
  *
  * @author Hoshi
- * @Time 2025/2/26
  * @version 1.0
+ * @since 2025/2/26
  */
 public class G1Measure implements ErrorMeasure {
     @Override

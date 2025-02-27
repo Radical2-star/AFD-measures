@@ -5,10 +5,10 @@ import model.FunctionalDependency;
 
 /**
  *  AbstractMeasure
- * @Description
- * @Author Hoshi
- * @Time 2025/2/26 
- * @Version 1.0
+ *
+ * @author Hoshi
+ * @version 1.0
+ * @since 2025/2/26
  */
 public interface ErrorMeasure {
     /**
