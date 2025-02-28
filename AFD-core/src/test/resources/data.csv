@@ -1,0 +1,9 @@
+id,name,department,manager,office_number,hire_date,salary
+1001,Alice,Engineering,Bob,501,2020-01-15,85000
+1002,Charlie,Marketing,David,302,2019-03-22,75000
+1003,Eve,Engineering,Bob,501,2021-07-10,90000
+1004,Frank,Sales,Grace,201,2022-05-01,68000
+1005,Alice,Engineering,Bob,501,2020-01-15,85000
+1006,Henry,Marketing,Ella,302,2023-02-14,77000
+1007,Ivy,Sales,Grace,201,2021-11-30,72000
+1008,Jack,Engineering,Bob,502,2022-09-05,88000

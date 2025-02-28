@@ -1,6 +1,6 @@
 package sampling;
 
-import model.DataSet;
+import model.AutoTypeDataSet;
 
 import java.util.List;
 
@@ -18,5 +18,5 @@ public interface SamplingStrategy {
      * @param sampleSize 期望样本大小
      * @return 样本行索引列表
      */
-    List<Integer> createSamples(DataSet dataset, int sampleSize);
+    List<Integer> createSamples(AutoTypeDataSet dataset, int sampleSize);
 }

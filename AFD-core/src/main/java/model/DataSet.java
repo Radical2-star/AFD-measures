@@ -1,37 +1,57 @@
 package model;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 
 /**
- *  DataSet
- * 
  * @author Hoshi
  * @version 1.0
- * @since 2025/2/26
+ * @since 2025/2/28
  */
 public class DataSet {
-    private final List<String> attributes;
-    private final List<List<Object>> data;
+    private final List<String> columnHeaders;
+    private final List<List<String>> rows;
+    private final int columnCount;
 
-    public DataSet(List<String> attributes, List<List<Object>> data) {
-        this.attributes = Collections.unmodifiableList(attributes);
-        this.data = Collections.unmodifiableList(data);
+    public DataSet(List<String> columnHeaders) {
+        this.columnHeaders = new ArrayList<>(Objects.requireNonNull(columnHeaders));
+        this.columnCount = columnHeaders.size();
+        this.rows = new ArrayList<>();
     }
 
-    public int getAttributeIndex(String name) {
-        return attributes.indexOf(name);
+    public void addRow(List<String> row) {
+        validateRow(row);
+        rows.add(new ArrayList<>(row));
     }
 
-    public Object getValue(int row, int column) {
-        return data.get(row).get(column);
+    private void validateRow(List<String> row) {
+        if (row.size() != columnCount) {
+            throw new IllegalArgumentException(
+                    String.format("Expected %d columns, got %d", columnCount, row.size())
+            );
+        }
     }
 
-    public int size() {
-        return data.size();
+    // Getters
+    public List<String> getRow(int index) {
+        return Collections.unmodifiableList(rows.get(index));
     }
 
-    public List<String> getAttributes() {
-        return attributes;
+    public String getValue(int rowIndex, int columnIndex) {
+        return rows.get(rowIndex).get(columnIndex);
+    }
+
+    public int getRowCount() {
+        return rows.size();
+    }
+
+    public int getColumnCount() {
+        return columnCount;
+    }
+
+    public String getColumnName(int index) {
+        return columnHeaders.get(index);
     }
 }
