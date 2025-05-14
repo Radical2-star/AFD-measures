@@ -1,11 +1,13 @@
 package measure;
 
-import model.AutoTypeDataSet;
 import model.DataSet;
 import model.FunctionalDependency;
 import pli.PLI;
 import pli.PLICache;
+import sampling.SamplingStrategy;
+import static utils.BitSetUtils.*;
 
+import java.util.BitSet;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
@@ -19,14 +21,12 @@ import java.util.Set;
  */
 public class G1Measure implements ErrorMeasure {
     @Override
-    public double calculateError(DataSet data,
-                                 FunctionalDependency fd,
+    public double calculateError(BitSet lhsBitSet, int rhs, DataSet data,
                                  PLICache cache) {
-        Set<Integer> lhs = fd.getLhs();
-        int rhs = fd.getRhs();
+        Set<Integer> lhs = bitSetToSet(lhsBitSet);
 
         // 获取左侧列的PLI
-        PLI lhsPLI = cache.getPLI(lhs);
+        PLI lhsPLI = cache.getOrCalculatePLI(lhsBitSet);
 
         // 计算总可能元组对数
         long totalPairs = totalPossiblePairs(data.getRowCount());
@@ -68,4 +68,23 @@ public class G1Measure implements ErrorMeasure {
 
         return totalPairs - samePairs;
     }
+
+    @Override
+    public double estimateError(BitSet lhsBitSet, int rhs, DataSet data,
+                                PLICache cache, SamplingStrategy strategy) {
+        // TODO: estimate方法待实现（需要结合samplingStrategy）
+        Set<Integer> lhs = bitSetToSet(lhsBitSet);
+
+        // 获取左侧列的PLI
+        PLI lhsPLI = cache.getOrCalculatePLI(lhsBitSet);
+
+        // 计算总可能元组对数
+        long totalPairs = totalPossiblePairs(data.getRowCount());
+
+        // 计算违反的元组对数
+        long violatingPairs = calculateViolatingPairs(lhsPLI, data, rhs);
+
+        return (double) violatingPairs / totalPairs;
+    }
+
 }

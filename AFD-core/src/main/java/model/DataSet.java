@@ -16,7 +16,7 @@ public class DataSet {
     private final int columnCount;
 
     public DataSet(List<String> columnHeaders) {
-        this.columnHeaders = new ArrayList<>(Objects.requireNonNull(columnHeaders));
+        this.columnHeaders = columnHeaders;
         this.columnCount = columnHeaders.size();
         this.rows = new ArrayList<>();
     }

@@ -1,15 +1,18 @@
 package measure;
 
-import model.AutoTypeDataSet;
 import model.DataSet;
 import model.FunctionalDependency;
 import pli.PLI;
 import pli.PLICache;
+import sampling.SamplingStrategy;
 
+import java.util.BitSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+
+import static utils.BitSetUtils.bitSetToSet;
 
 /**
  *  G3Measure
@@ -20,14 +23,12 @@ import java.util.Set;
  */
 public class G3Measure implements ErrorMeasure {
     @Override
-    public double calculateError(DataSet data,
-                                 FunctionalDependency fd,
+    public double calculateError(BitSet lhsBitSet, int rhs, DataSet data,
                                  PLICache cache) {
-        Set<Integer> lhs = fd.getLhs();
-        int rhs = fd.getRhs();
+        Set<Integer> lhs = bitSetToSet(lhsBitSet);
 
         // 获取左侧列的PLI
-        PLI lhsPLI = cache.getPLI(lhs);
+        PLI lhsPLI = cache.getOrCalculatePLI(lhsBitSet);
 
         // 计算最大满足子集的大小
         long maxConsistent = calculateMaxConsistentSubset(lhsPLI, data, rhs);
@@ -59,6 +60,12 @@ public class G3Measure implements ErrorMeasure {
         total += singletonCount;
 
         return total;
+    }
+
+    public double estimateError(BitSet lhsBitSet, int rhs, DataSet data,
+                                PLICache cache, SamplingStrategy strategy) {
+        // TODO: estimate方法待实现（需要结合samplingStrategy）
+        return 0.0;
     }
 
 }

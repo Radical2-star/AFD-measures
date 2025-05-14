@@ -3,6 +3,9 @@ package measure;
 import model.DataSet;
 import model.FunctionalDependency;
 import pli.PLICache;
+import sampling.SamplingStrategy;
+
+import java.util.BitSet;
 
 /**
  *  AbstractMeasure
@@ -12,7 +15,14 @@ import pli.PLICache;
  * @since 2025/2/26
  */
 public interface ErrorMeasure {
-    double calculateError(DataSet data,
-                          FunctionalDependency fd,
+    double calculateError(BitSet lhs,
+                          int rhs,
+                          DataSet data,
                           PLICache cache);
+    double estimateError(BitSet lhs,
+                         int rhs,
+                         DataSet data,
+                         PLICache cache,
+                         SamplingStrategy strategy
+    );
 }

@@ -3,7 +3,7 @@
     <modelVersion>4.0.0</modelVersion>
     <parent>
         <groupId>com.example</groupId>
-        <artifactId>G3Sample</artifactId>
+        <artifactId>AFD-measures</artifactId>
         <version>1.0-SNAPSHOT</version>
     </parent>
 

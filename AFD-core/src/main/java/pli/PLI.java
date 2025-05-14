@@ -1,7 +1,8 @@
 package pli;
 
+import model.DataSet;
+
 import java.util.*;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
@@ -11,59 +12,139 @@ import java.util.stream.Stream;
  * @since 2025/2/28
  */
 public class PLI {
-    private final Set<Integer> columns;
+    // private final Set<Integer> columns;
+    private final BitSet columns;
+    private final int rowCount;
     private final List<Set<Integer>> equivalenceClasses;
-    private final Map<Integer, Integer> rowClusterMap;
+    //private final Map<Integer, Integer> rowClusterMap;
+    private final int size;
 
-    public PLI(Set<Integer> columns, List<Set<Integer>> equivalenceClasses) {
-        this.columns = Collections.unmodifiableSet(new HashSet<>(columns));
-        this.equivalenceClasses = Collections.unmodifiableList(
-                clusterStream()
-                        .parallel()
-                        .filter(set -> set.size() > 1)
-                        .collect(Collectors.toList())
-        );
+    public PLI(BitSet columns, DataSet data) {
+        this.columns = (BitSet) columns.clone();
+        this.rowCount = data.getRowCount();
+        this.equivalenceClasses = constructEquivalenceClasses(columns, data);
+        this.size = clusterStream()
+                .mapToInt(Set::size)
+                .sum();
         // 构建行到等价类的快速查找表
+        /*
         this.rowClusterMap = new LinkedHashMap<>();
         for (int i = 0; i < this.equivalenceClasses.size(); i++) {
             for (Integer row : this.equivalenceClasses.get(i)) {
                 rowClusterMap.put(row, i);
             }
         }
+        */
     }
+
+    private PLI(BitSet columns, int rowCount, List<Set<Integer>> equivalenceClasses) {
+        this.columns = (BitSet) columns.clone();
+        this.rowCount = rowCount;
+        this.equivalenceClasses = equivalenceClasses;
+        this.size = clusterStream()
+                .mapToInt(Set::size)
+                .sum();
+        // 构建行到等价类的快速查找表
+        /*
+        this.rowClusterMap = new LinkedHashMap<>();
+        for (int i = 0; i < this.equivalenceClasses.size(); i++) {
+            for (Integer row : this.equivalenceClasses.get(i)) {
+                rowClusterMap.put(row, i);
+            }
+        }
+        */
+    }
+
+    private List<Set<Integer>> constructEquivalenceClasses(BitSet columns, DataSet data) {
+        // 用Map来记录每个键对应的行索引集合
+        Map<String, Set<Integer>> keyToRows = new HashMap<>();
+        int totalRows = data.getRowCount();
+
+        // 遍历每一行
+        for (int rowIdx = 0; rowIdx < totalRows; rowIdx++) {
+            List<String> row = data.getRow(rowIdx);
+            // 生成当前行在选定列上的组合键
+            StringJoiner keyBuilder = new StringJoiner("|");
+            columns.stream().forEach(col -> keyBuilder.add(row.get(col)));
+            String key = keyBuilder.toString();
+
+            // 将行索引加入对应的集合
+            keyToRows.computeIfAbsent(key, k -> new HashSet<>()).add(rowIdx);
+        }
+
+        // 过滤并收集大小>1的集合
+        List<Set<Integer>> equivalenceClasses = new ArrayList<>();
+        for (Set<Integer> group : keyToRows.values()) {
+            if (group.size() > 1) {
+                equivalenceClasses.add(Collections.unmodifiableSet(group));
+            }
+        }
+
+        return equivalenceClasses;
+    }
+
 
     /**
      * 计算当前PLI与另一个PLI的交集
      */
     public PLI intersect(PLI other) {
-        Set<Integer> combinedColumns = new LinkedHashSet<>(this.columns);
-        combinedColumns.addAll(other.columns);
+        // 步骤①：确定较大的PLI作为Y，较小的作为X
+        PLI x, y;
+        if (this.size() >= other.size()) {
+            y = this;
+            x = other;
+        } else {
+            y = other;
+            x = this;
+        }
 
-        // 使用行号作为连接键进行交集计算
-        Map<Integer, Set<Integer>> mergedClusters = new LinkedHashMap<>();
-
-        for (Set<Integer> cluster : this.equivalenceClasses) {
+        // 步骤②：构建Y的属性向量（行号 -> 簇ID）
+        int[] yAttributeVector = new int[y.rowCount];
+        Arrays.fill(yAttributeVector, 0); // 初始值0表示单例
+        int clusterId = 1; // 簇ID从1开始编号
+        for (Set<Integer> cluster : y.equivalenceClasses) {
             for (Integer row : cluster) {
-                Integer otherClusterId = other.rowClusterMap.get(row);
-                if (otherClusterId != null) {
-                    // 生成复合键：当前cluster ID + 对方cluster ID
-                    String compositeKey = rowClusterMap.get(row) + "_" + otherClusterId;
+                yAttributeVector[row] = clusterId;
+            }
+            clusterId++;
+        }
 
-                    mergedClusters
-                            .computeIfAbsent(compositeKey.hashCode(), k -> new LinkedHashSet<>())
+        // 步骤③：用Y的属性向量探测X的每个簇
+        List<Set<Integer>> newEquivalenceClasses = new ArrayList<>();
+        for (Set<Integer> xCluster : x.equivalenceClasses) {
+            // 按Y的属性值分组
+            Map<Integer, Set<Integer>> tempGroups = new HashMap<>();
+            for (Integer row : xCluster) {
+                int yValue = yAttributeVector[row];
+                if (yValue != 0) { // 只处理有簇的情况
+                    tempGroups.computeIfAbsent(yValue, k -> new HashSet<>())
                             .add(row);
+                }
+            }
+
+            // 过滤并收集有效簇（大小>1）
+            for (Set<Integer> group : tempGroups.values()) {
+                if (group.size() > 1) {
+                    newEquivalenceClasses.add(Collections.unmodifiableSet(group));
                 }
             }
         }
 
-        List<Set<Integer>> newClusters = new ArrayList<>(mergedClusters.values());
+        // 步骤④：合并列属性（取并集）
+        BitSet mergedColumns = (BitSet) x.columns.clone();
+        mergedColumns.or(y.columns);
 
-        return new PLI(combinedColumns, newClusters);
+        // 创建新PLI（使用私有构造函数）
+        return new PLI(mergedColumns, x.rowCount, newEquivalenceClasses);
     }
 
     // Getters
-    public Set<Integer> getColumns() {
-        return columns;
+    public BitSet getColumns() {
+        return (BitSet) columns.clone();
+    }
+
+    public int getRowCount() {
+        return rowCount;
     }
 
     public List<Set<Integer>> getEquivalenceClasses() {
@@ -72,6 +153,10 @@ public class PLI {
 
     public int getClusterCount() {
         return equivalenceClasses.size();
+    }
+
+    public int size(){
+        return this.size;
     }
 
     public Stream<Set<Integer>> clusterStream() {

@@ -3,9 +3,12 @@ package pli;
 import model.DataSet;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import utils.BitSetUtils;
+
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.Arrays;
+import java.util.BitSet;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
@@ -16,64 +19,58 @@ import java.util.Set;
  * @version 1.0
  * @since 2025/2/28
  */
-class PLICacheTest {
+public class PLICacheTest {
+
     private DataSet testDataSet;
-    private PLICache pliCache;
 
-    @BeforeEach
-    void setUp() {
-        // 创建测试数据集（3行2列）
-        // 列0: ["A", "A", "B"]
-        // 列1: ["1", "1", "2"]
-        List<String> headers = Arrays.asList("col0", "col1");
-        testDataSet = new DataSet(headers);
-        testDataSet.addRow(Arrays.asList("A", "1"));
-        testDataSet.addRow(Arrays.asList("A", "1"));
-        testDataSet.addRow(Arrays.asList("B", "2"));
-
-        pliCache = new PLICache(testDataSet);
+    // 新设计的数据集（保证能产生非空交集）
+    private DataSet createTestDataSet() {
+        DataSet data = new DataSet(List.of("姓名", "年龄", "城市"));
+        // 行0和1在"年龄"和"城市"列都相同
+        data.addRow(List.of("张三", "25", "北京"));  // 行0
+        data.addRow(List.of("李四", "25", "北京"));  // 行1
+        // 行2和3在"年龄"列相同
+        data.addRow(List.of("王五", "30", "上海"));  // 行2
+        data.addRow(List.of("赵六", "25", "广州"));  // 行3
+        return data;
     }
 
-    @Test
-    void testInitialization() {
-        // 验证单列PLI已缓存
-        assertTrue(pliCache.getPLI(Collections.singleton(0)).getClusterCount() > 0);
-        assertTrue(pliCache.getPLI(Collections.singleton(1)).getClusterCount() > 0);
+    @BeforeEach
+    void setup() {
+        testDataSet = createTestDataSet();
+        PLICache.clear();
     }
 
     @Test
     void testSingleColumnPLI() {
-        PLI col0PLI = pliCache.getPLI(Collections.singleton(0));
-        assertEquals(1, col0PLI.getClusterCount());
-        assertEquals(new HashSet<>(Arrays.asList(0, 1)), col0PLI.getEquivalenceClasses().get(0));
+        PLICache cache = PLICache.getInstance(testDataSet);
 
-        PLI col1PLI = pliCache.getPLI(Collections.singleton(1));
-        assertEquals(1, col1PLI.getClusterCount());
-        assertEquals(new HashSet<>(Arrays.asList(0, 1)), col1PLI.getEquivalenceClasses().get(0));
+        // 验证年龄列的PLI（应有3行25岁）
+        BitSet ageCol = new BitSet();
+        ageCol.set(1);
+        PLI agePLI = cache.getOrCalculatePLI(ageCol);
+        assertEquals(1, agePLI.getClusterCount()); // 预期一个等价类{0,1,3}
+        assertTrue(agePLI.getEquivalenceClasses().get(0).containsAll(List.of(0, 1, 3)));
     }
 
     @Test
-    void testMultiColumnPLI() {
-        // 列0和列1的组合
-        PLI combinedPLI = pliCache.getPLI(new HashSet<>(Arrays.asList(0, 1)));
+    void testIntersectionWithResult() {
+        PLICache cache = PLICache.getInstance(testDataSet);
 
-        assertEquals(2, combinedPLI.getColumns().size());
-        assertEquals(1, combinedPLI.getClusterCount());
-        assertEquals(new HashSet<>(Arrays.asList(0, 1)), combinedPLI.getEquivalenceClasses().get(0));
-    }
+        // 构建两个PLI
+        BitSet ageCol = new BitSet();
+        ageCol.set(1);
+        PLI agePLI = cache.getOrCalculatePLI(ageCol); // 年龄PLI: {0,1,3}
 
-    @Test
-    void testCacheReuse() {
-        PLI firstCall = pliCache.getPLI(new HashSet<>(Arrays.asList(0, 1)));
-        PLI secondCall = pliCache.getPLI(new HashSet<>(Arrays.asList(1, 0))); // 不同顺序
+        BitSet cityCol = new BitSet();
+        cityCol.set(2);
+        PLI cityPLI = cache.getOrCalculatePLI(cityCol); // 城市PLI: {0,1}（北京）
 
-        assertSame(firstCall, secondCall, "应返回缓存中的同一实例");
-    }
+        // 计算交集
+        PLI intersectPLI = agePLI.intersect(cityPLI);
 
-    @Test
-    void testInvalidColumn() {
-        assertThrows(IllegalArgumentException.class, () -> {
-            pliCache.getPLI(Collections.singleton(3)); // 不存在的列
-        });
+        // 验证结果（年龄25 + 北京 → 行0,1）
+        assertEquals(1, intersectPLI.getClusterCount());
+        assertTrue(intersectPLI.getEquivalenceClasses().get(0).containsAll(List.of(0, 1)));
     }
 }
