@@ -1,12 +1,9 @@
 package measure;
 
 import model.DataSet;
-import model.FunctionalDependency;
 import pli.PLI;
 import pli.PLICache;
 import sampling.SamplingStrategy;
-import static utils.BitSetUtils.*;
-
 import java.util.BitSet;
 import java.util.HashMap;
 import java.util.Map;
@@ -21,70 +18,55 @@ import java.util.Set;
  */
 public class G1Measure implements ErrorMeasure {
     @Override
-    public double calculateError(BitSet lhsBitSet, int rhs, DataSet data,
-                                 PLICache cache) {
-        Set<Integer> lhs = bitSetToSet(lhsBitSet);
+    public double calculateError(BitSet lhs, int rhs, DataSet data, PLICache cache) {
+        // 获取rhs对应的PLI（单列）
+        BitSet rhsBitSet = new BitSet();
+        rhsBitSet.set(rhs);
+        PLI rhsPLI = cache.getOrCalculatePLI(rhsBitSet);
+        int[] vY = rhsPLI.toAttributeVector();
 
-        // 获取左侧列的PLI
-        PLI lhsPLI = cache.getOrCalculatePLI(lhsBitSet);
+        // 获取lhs对应的PLI
+        PLI lhsPLI = cache.getOrCalculatePLI(lhs);
 
-        // 计算总可能元组对数
-        long totalPairs = totalPossiblePairs(data.getRowCount());
+        // 总误差元组对数
+        long totalViolations = 0;
+        int totalRows = data.getRowCount();
+        long totalPossiblePairs = (long) totalRows * (totalRows - 1);
 
-        // 计算违反的元组对数
-        long violatingPairs = calculateViolatingPairs(lhsPLI, data, rhs);
-
-        return (double) violatingPairs / totalPairs;
-    }
-
-    private long totalPossiblePairs(int n) {
-        return n * (n - 1L) / 2L;
-    }
-
-    private long calculateViolatingPairs(PLI lhsPLI, DataSet data, int rhs) {
-        long count = 0L;
-
+        // 遍历lhs的每个等价类
         for (Set<Integer> cluster : lhsPLI.getEquivalenceClasses()) {
-            // 统计该簇中不同RHS值的分布
-            Map<String, Integer> rhsCounts = new HashMap<>();
+            int clusterSize = cluster.size();
+            if (clusterSize < 2) continue;
+
+            // 统计rhs属性向量中各clusterId的出现次数
+            Map<Integer, Integer> counter = new HashMap<>();
             for (int row : cluster) {
-                String value = data.getValue(row, rhs);
-                rhsCounts.put(value, rhsCounts.getOrDefault(value, 0) + 1);
+                int yClusterId = vY[row];
+                if (yClusterId != 0) { // 忽略单例
+                    counter.put(yClusterId, counter.getOrDefault(yClusterId, 0) + 1);
+                }
             }
 
-            // 计算该簇内的冲突对数
-            count += calculateClusterViolations(rhsCounts);
+            // 计算该簇的总元组对数
+            long totalPairsInCluster = (long) clusterSize * (clusterSize - 1);
+
+            // 计算有效匹配的元组对数
+            long validPairs = 0;
+            for (int count : counter.values()) {
+                validPairs += (long) count * (count - 1);
+            }
+
+            // 累计违规对：总对数 - 有效对数
+            totalViolations += (totalPairsInCluster - validPairs);
         }
-        return count;
-    }
 
-    private long calculateClusterViolations(Map<String, Integer> counts) {
-        long sum = counts.values().stream().mapToLong(i -> i).sum();
-        long totalPairs = sum * (sum - 1) / 2;
-
-        long samePairs = counts.values().stream()
-                .mapToLong(n -> n * (n - 1) / 2)
-                .sum();
-
-        return totalPairs - samePairs;
+        // 计算最终误差率
+        return totalPossiblePairs == 0 ? 0 : (double) totalViolations / totalPossiblePairs;
     }
 
     @Override
-    public double estimateError(BitSet lhsBitSet, int rhs, DataSet data,
-                                PLICache cache, SamplingStrategy strategy) {
-        // TODO: estimate方法待实现（需要结合samplingStrategy）
-        Set<Integer> lhs = bitSetToSet(lhsBitSet);
-
-        // 获取左侧列的PLI
-        PLI lhsPLI = cache.getOrCalculatePLI(lhsBitSet);
-
-        // 计算总可能元组对数
-        long totalPairs = totalPossiblePairs(data.getRowCount());
-
-        // 计算违反的元组对数
-        long violatingPairs = calculateViolatingPairs(lhsPLI, data, rhs);
-
-        return (double) violatingPairs / totalPairs;
+    public double estimateError(BitSet lhs, int rhs, DataSet data, PLICache cache, SamplingStrategy strategy) {
+        // 暂时直接返回完整计算结果
+        return calculateError(lhs, rhs, data, cache);
     }
-
 }

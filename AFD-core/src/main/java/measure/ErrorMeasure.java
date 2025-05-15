@@ -1,7 +1,6 @@
 package measure;
 
 import model.DataSet;
-import model.FunctionalDependency;
 import pli.PLICache;
 import sampling.SamplingStrategy;
 

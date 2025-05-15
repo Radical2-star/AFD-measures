@@ -12,47 +12,30 @@ import java.util.stream.Stream;
  * @since 2025/2/28
  */
 public class PLI {
-    // private final Set<Integer> columns;
     private final BitSet columns;
     private final int rowCount;
     private final List<Set<Integer>> equivalenceClasses;
-    //private final Map<Integer, Integer> rowClusterMap;
+    private final int[] attributeVector;
     private final int size;
 
     public PLI(BitSet columns, DataSet data) {
         this.columns = (BitSet) columns.clone();
         this.rowCount = data.getRowCount();
         this.equivalenceClasses = constructEquivalenceClasses(columns, data);
+        this.attributeVector = toAttributeVector(); // 对单列PLI，缓存其属性向量
         this.size = clusterStream()
                 .mapToInt(Set::size)
                 .sum();
-        // 构建行到等价类的快速查找表
-        /*
-        this.rowClusterMap = new LinkedHashMap<>();
-        for (int i = 0; i < this.equivalenceClasses.size(); i++) {
-            for (Integer row : this.equivalenceClasses.get(i)) {
-                rowClusterMap.put(row, i);
-            }
-        }
-        */
     }
 
     private PLI(BitSet columns, int rowCount, List<Set<Integer>> equivalenceClasses) {
         this.columns = (BitSet) columns.clone();
         this.rowCount = rowCount;
         this.equivalenceClasses = equivalenceClasses;
+        this.attributeVector = null;
         this.size = clusterStream()
                 .mapToInt(Set::size)
                 .sum();
-        // 构建行到等价类的快速查找表
-        /*
-        this.rowClusterMap = new LinkedHashMap<>();
-        for (int i = 0; i < this.equivalenceClasses.size(); i++) {
-            for (Integer row : this.equivalenceClasses.get(i)) {
-                rowClusterMap.put(row, i);
-            }
-        }
-        */
     }
 
     private List<Set<Integer>> constructEquivalenceClasses(BitSet columns, DataSet data) {
@@ -99,15 +82,7 @@ public class PLI {
         }
 
         // 步骤②：构建Y的属性向量（行号 -> 簇ID）
-        int[] yAttributeVector = new int[y.rowCount];
-        Arrays.fill(yAttributeVector, 0); // 初始值0表示单例
-        int clusterId = 1; // 簇ID从1开始编号
-        for (Set<Integer> cluster : y.equivalenceClasses) {
-            for (Integer row : cluster) {
-                yAttributeVector[row] = clusterId;
-            }
-            clusterId++;
-        }
+        int[] yAttributeVector = y.toAttributeVector();
 
         // 步骤③：用Y的属性向量探测X的每个簇
         List<Set<Integer>> newEquivalenceClasses = new ArrayList<>();
@@ -163,5 +138,19 @@ public class PLI {
         if (equivalenceClasses != null) {
             return equivalenceClasses.stream();
         } else return Stream.empty();
+    }
+
+    public int[] toAttributeVector() {
+        if (this.attributeVector != null) return this.attributeVector;
+        int[] attributeVector = new int[this.rowCount];
+        Arrays.fill(attributeVector, 0); // 初始值0表示单例
+        int clusterId = 1; // 簇ID从1开始编号
+        for (Set<Integer> cluster : this.equivalenceClasses) {
+            for (Integer row : cluster) {
+                attributeVector[row] = clusterId;
+            }
+            clusterId++;
+        }
+        return attributeVector;
     }
 }

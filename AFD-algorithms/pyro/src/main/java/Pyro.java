@@ -1,10 +1,13 @@
+import measure.G3Measure;
 import measure.SimpleMeasure;
 import model.DataSet;
 import model.FunctionalDependency;
 import pli.PLICache;
 import sampling.RandomSampling;
+import utils.DataLoader;
 import utils.FunctionTimer;
 
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Scanner;
@@ -44,12 +47,15 @@ public class Pyro {
     }
 
     public static void main(String[] args) {
-        List<FunctionalDependency> res = new Pyro(new DataSet(
-                List.of("A", "B", "C", "D", "E", "F", "G")
-        ), new PyroConfig(
-                new SimpleMeasure(),
+        DataLoader loader = DataLoader.fromFile(
+                Path.of("data/test_new.csv")
+        ).withHeader(true).withDelimiter(',');
+        DataSet dataset = loader.load();
+        List<FunctionalDependency> res = new Pyro(dataset,
+                new PyroConfig(
+                new G3Measure(),
                 new RandomSampling(),
-                0.6
+                0.05
         )).discover();
         System.out.println(res);
         System.out.println(res.size());
