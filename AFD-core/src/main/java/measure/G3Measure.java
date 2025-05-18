@@ -7,6 +7,7 @@ import sampling.SamplingStrategy;
 
 import java.util.BitSet;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 
@@ -20,55 +21,101 @@ import java.util.Set;
 public class G3Measure implements ErrorMeasure {
     @Override
     public double calculateError(BitSet lhs, int rhs, DataSet data, PLICache cache) {
-        // 获取rhs对应的PLI（单列）及其属性向量
+        // 1. 获取rhs对应的PLI（单列）及属性向量
         BitSet rhsBitSet = new BitSet();
         rhsBitSet.set(rhs);
         PLI rhsPLI = cache.getOrCalculatePLI(rhsBitSet);
+        int[] vY = rhsPLI.toAttributeVector();
 
-        // 处理根节点的情况：UCC
+        // 2. 初始化总删除数和总行数
+        int totalRows = data.getRowCount();
+        if (totalRows <= 1) return 0.0; // 空表或单行表无需计算
+        int totalRemovals = 0;
+
+        // 处理根节点特殊情况
         if (lhs.isEmpty()) {
-            // 遍历rhsPLI中的所有簇，分别计算最大有效行数并求和
-            // TODO: 补充根节点的特殊情况
+            for (Set<Integer> cluster : rhsPLI.getEquivalenceClasses()) {
+                int clusterSize = cluster.size();
+                totalRemovals += clusterSize - 1;
+            }
+            return totalRemovals == 0 ? 0 : (double) totalRemovals / (totalRows - 1);
         }
 
-        int[] vY = rhsPLI.toAttributeVector(); // 属性向量
-
-        // 获取lhs对应的PLI
+        // 3. 获取lhs对应的PLI
         PLI lhsPLI = cache.getOrCalculatePLI(lhs);
 
-        int totalRows = data.getRowCount();
-        if (totalRows <= 1) return 0.0;
-
-        int maxValidRows = 0;
-
-        // 遍历lhs的每个等价类
-        // TODO: 计算逻辑有问题，应该对每个簇统计要删除的元组数，否则单例直接没了
+        // 4. 遍历lhs的每个等价类簇
         for (Set<Integer> cluster : lhsPLI.getEquivalenceClasses()) {
-            Map<Integer, Integer> yClusterCounter = new HashMap<>();
+            int clusterSize = cluster.size();
+            Map<Integer, Integer> freqCounter = new HashMap<>();
+
+            // 4.1 统计当前簇中rhs属性值的分布
             for (int row : cluster) {
-                int yClusterId = vY[row];
-                if (yClusterId != 0) { // 忽略单例
-                    yClusterCounter.merge(yClusterId, 1, Integer::sum);
-                }
+                int yVal = vY[row];
+                freqCounter.put(yVal, freqCounter.getOrDefault(yVal, 0) + 1);
             }
 
-            // 取当前簇中最大的Y簇计数
-            maxValidRows += yClusterCounter.values().stream()
-                    .mapToInt(v -> v)
-                    .max()
-                    .orElse(0); // 若全为单例则加0
+            // 4.2 找出出现次数最多的属性值
+            int maxCount = freqCounter.values().stream()
+                    .max(Integer::compare)
+                    .orElse(0); // 当簇为空时返回0（理论上不会发生）
+
+            // 4.3 计算需要删除的元组数
+            if (maxCount == 0) {
+                // 情况1：所有元组在rhs都是单例 → 保留1个，删除(clusterSize-1)
+                totalRemovals += (clusterSize - 1);
+            } else {
+                // 情况2：保留出现最多的值对应的元组 → 删除(clusterSize - maxCount)
+                totalRemovals += (clusterSize - maxCount);
+            }
         }
 
-        // 处理全表单例的情况（至少保留1行）
-        if (maxValidRows == 0) maxValidRows = 1;
-
-        // 计算公式: 1 - (maxValidRows - 1)/(totalRows - 1)
-        double ratio = (double) (maxValidRows - 1) / (totalRows - 1);
-        return 1.0 - ratio;
+        // 5. 计算最终误差率
+        return (double) totalRemovals / (totalRows - 1);
     }
 
     @Override
     public double estimateError(BitSet lhs, int rhs, DataSet data, PLICache cache, SamplingStrategy strategy) {
-        return calculateError(lhs, rhs, data, cache);
+        // TODO: 未测试estimate逻辑
+        // 应用采样策略
+        strategy.initialize(data, 0.2); // 示例使用20%比例采样
+        Set<Integer> sampleRows = strategy.getSampleIndices();
+
+        // 获取原始PLI信息
+        PLI lhsPLI = cache.getOrCalculatePLI(lhs);
+        int[] rhsVector = cache.getOrCalculatePLI(BitSet.valueOf(new long[]{1L << rhs}))
+                .toAttributeVector();
+
+        // 统计样本中的误差
+        long sampleViolations = 0;
+        for (Set<Integer> cluster : lhsPLI.getEquivalenceClasses()) {
+            // 筛选出在样本中的行
+            Set<Integer> sampledCluster = new HashSet<>();
+            for (int row : cluster) {
+                if (sampleRows.contains(row)) {
+                    sampledCluster.add(row);
+                }
+            }
+
+            // 计算该子簇的删除数
+            Map<Integer, Integer> counter = new HashMap<>();
+            for (int row : sampledCluster) {
+                int yVal = rhsVector[row];
+                counter.put(yVal, counter.getOrDefault(yVal, 0) + 1);
+            }
+
+            int maxCount = counter.values().stream()
+                    .max(Integer::compare).orElse(0);
+            if (maxCount == 0) {
+                sampleViolations += (sampledCluster.size() - 1);
+            } else {
+                sampleViolations += (sampledCluster.size() - maxCount);
+            }
+        }
+
+        // 计算采样比例并估计总误差
+        double sampleRate = (double)sampleRows.size() / data.getRowCount();
+        double estimatedTotal = sampleViolations / sampleRate;
+        return estimatedTotal / (data.getRowCount() - 1);
     }
 }

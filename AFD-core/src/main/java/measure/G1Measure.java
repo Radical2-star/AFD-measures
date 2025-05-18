@@ -23,15 +23,26 @@ public class G1Measure implements ErrorMeasure {
         BitSet rhsBitSet = new BitSet();
         rhsBitSet.set(rhs);
         PLI rhsPLI = cache.getOrCalculatePLI(rhsBitSet);
-        int[] vY = rhsPLI.toAttributeVector();
-
-        // 获取lhs对应的PLI
-        PLI lhsPLI = cache.getOrCalculatePLI(lhs);
 
         // 总误差元组对数
         long totalViolations = 0;
         int totalRows = data.getRowCount();
         long totalPossiblePairs = (long) totalRows * (totalRows - 1);
+
+        // 处理根节点的情况：UCC
+        if (lhs.isEmpty()) {
+            // 遍历rhsPLI中的所有簇，分别计算n * (n-1)并求和
+            for (Set<Integer> cluster : rhsPLI.getEquivalenceClasses()) {
+                int clusterSize = cluster.size();
+                totalViolations += (long) clusterSize * (clusterSize - 1);
+            }
+            return totalViolations == 0 ? 0 : (double) totalViolations / totalPossiblePairs;
+        }
+
+        int[] vY = rhsPLI.toAttributeVector();
+
+        // 获取lhs对应的PLI
+        PLI lhsPLI = cache.getOrCalculatePLI(lhs);
 
         // 遍历lhs的每个等价类
         for (Set<Integer> cluster : lhsPLI.getEquivalenceClasses()) {

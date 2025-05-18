@@ -51,6 +51,7 @@ public class SearchSpace {
         logger.info("开始搜索, rhs = {}", rhs);
         // 判断是否为近似UCC，如果是，则整个搜索空间被剪枝
         validate(root);
+        logger.info("root: {}", root);
         if (root.isValid(config.getMaxError())) {
             minValidFD.add(root.getLhs());
             return;
@@ -71,25 +72,29 @@ public class SearchSpace {
         while (!launchpads.isEmpty()) {
             Node launchpad = launchpads.poll();
             logger.info("launchpad: {}", launchpad);
+            if (checkValidPrune(launchpad.getLhs())) {
+                continue;
+            }
             // 先检查launchpad是否被maxNonFD剪枝，如果已经被剪枝，则直接进入逃逸阶段
             if (!checkInvalidPrune(launchpad.getLhs())) {
-                // launchpad需要直接验，如果有效，直接添加到minValidFD
+                // launchpad需要直接验，如果有效，直接添加到minValidFD和peaks
                 validate(launchpad);
+                Node peak = null;
                 if (launchpad.isValid(config.getMaxError())) {
-                    minValidFD.add(launchpad.getLhs());
-                    continue;
+                    peak = launchpad;
+                } else {
+                    MinMaxPair<Node> minMaxPair = new MinMaxPair<>(null, launchpad);
+                    // 上升，找到peak，并更新maxNonFD
+                    timer.start("ascend");
+                    minMaxPair = ascend(minMaxPair);
+                    timer.end("ascend");
+
+                    logger.info("上升到节点: {}", minMaxPair.getLeft());
+
+                    maxNonFD.add(minMaxPair.getRight().getLhs());
+                    logger.info("添加最大nonFD: {}", minMaxPair.getRight());
+                    peak = minMaxPair.getLeft();
                 }
-                MinMaxPair<Node> minMaxPair = new MinMaxPair<>(null, launchpad);
-                // 上升，找到peak，并更新maxNonFD
-                timer.start("ascend");
-                minMaxPair = ascend(minMaxPair);
-                timer.end("ascend");
-
-                logger.info("上升到节点: {}", minMaxPair.getLeft());
-
-                maxNonFD.add(minMaxPair.getRight().getLhs());
-                logger.info("添加最大nonFD: {}", minMaxPair.getRight());
-                Node peak = minMaxPair.getLeft();
                 if (peak != null) peaks.add(peak.getLhs());
                 // 下降，遍历peak覆盖的所有未剪枝节点，寻找最小FD
                 if (peak != null && peak.isValid(config.getMaxError())) {
@@ -203,17 +208,23 @@ public class SearchSpace {
                 queue.poll();
                 continue;
             }
+            // 先检查minNode本身是否被minValidFD剪枝
+            boolean isMinPruned = checkValidPrune(minNode.getLhs());
             // 最小性判断：如果子节点都验证无效，则为最小
             // 为此，验证通过时，不从队列中移除，并标记为visited
             // 如果已经visited，说明子节点都被验证过一遍了，则为最小有效FD
+            if (isMinPruned) {
+                visited.add(minNode.getLhs());
+            }
             if (visited.contains(minNode.getLhs())) {
-                logger.info("找到最小FD: {}", minNode);
-                minValidFD.add(minNode.getLhs());
                 queue.poll();
+                if (!isMinPruned) {
+                    logger.info("找到最小FD: {}", minNode);
+                    minValidFD.add(minNode.getLhs());
+                }
                 continue;
             }
-            // 先检查minNode本身是否被minValidFD剪枝
-            if (!checkValidPrune(minNode.getLhs())) {
+            if (!isMinPruned) {
                 validate(minNode);
                 if (minNode.isValid(config.getMaxError())) {
                     visited.add(minNode.getLhs());
@@ -222,7 +233,7 @@ public class SearchSpace {
                     continue;
                 }
             }
-            // 即使被剪枝，也需要把父节点加入队列，防止遗漏
+            // 即使被minValidFD剪枝，也需要把父节点加入队列，防止遗漏
             // 如果验证无效则不需要加入队列
             List<BitSet> parentsLhs = getAllParents(minNode.getLhs());
             for (BitSet parentLhs : parentsLhs) {
@@ -380,6 +391,17 @@ public class SearchSpace {
     private void estimate(Node node) {
         if (node.isEstimated()) return;
         node.setError(config.getMeasure().estimateError(node.getLhs(), rhs, dataSet, cache, config.getSamplingStrategy()));
+    }
+
+    public List<Node> getValidatedNodes() {
+        List<Node> result = new ArrayList<>();
+        List<BitSet> minLhs = minValidFD.toList(dataSet.getColumnCount());
+        for (BitSet lhs: minLhs) {
+            Node node = getOrCreateNode(lhs);
+            result.add(node);
+        }
+        result.sort(Comparator.comparingDouble(Node::getError));
+        return result;
     }
 
     public List<FunctionalDependency> getValidatedFDs() {

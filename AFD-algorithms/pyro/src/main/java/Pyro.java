@@ -32,15 +32,15 @@ public class Pyro {
         timer.end("initializePLI");
     }
 
-    public List<FunctionalDependency> discover() {
-        List<FunctionalDependency> result = new ArrayList<>();
+    public List<Node> discover() {
+        List<Node> result = new ArrayList<>();
 
         // 为每个属性创建搜索空间
         for (int rhs = 0; rhs < dataset.getColumnCount(); rhs++) {
+            if (rhs != 0) continue; // 仅测试一个searchspace，真正运行时请注释掉！
             SearchSpace searchSpace = new SearchSpace(rhs, dataset, pliCache, config);
             searchSpace.explore();
-            result.addAll(searchSpace.getValidatedFDs());
-            break; // 仅测试一个searchspace，真正运行时请注释掉！
+            result.addAll(searchSpace.getValidatedNodes());
         }
 
         return result;
@@ -51,13 +51,15 @@ public class Pyro {
                 Path.of("data/test_new.csv")
         ).withHeader(true).withDelimiter(',');
         DataSet dataset = loader.load();
-        List<FunctionalDependency> res = new Pyro(dataset,
+        List<Node> res = new Pyro(dataset,
                 new PyroConfig(
                 new G3Measure(),
                 new RandomSampling(),
                 0.05
         )).discover();
-        System.out.println(res);
+        for (int i = 0; i < 10; i++) { // 仅输出前10个结果
+            System.out.println(res.get(i));
+        }
         System.out.println(res.size());
     }
 }

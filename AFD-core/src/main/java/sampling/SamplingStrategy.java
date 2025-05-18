@@ -1,8 +1,10 @@
 package sampling;
 
 import model.AutoTypeDataSet;
+import model.DataSet;
 
 import java.util.List;
+import java.util.Set;
 
 /**
  *  SamplingStrategy
@@ -13,10 +15,19 @@ import java.util.List;
  */
 public interface SamplingStrategy {
     /**
-     * 创建样本集合
-     * @param dataset 完整数据集
-     * @param sampleSize 期望样本大小
-     * @return 样本行索引列表
+     * 初始化采样策略
+     * @param data         原始数据集
+     * @param sampleParam  采样参数（可以是比例或固定数量）
      */
-    List<Integer> createSamples(AutoTypeDataSet dataset, int sampleSize);
+    void initialize(DataSet data, double sampleParam);
+
+    /**
+     * 获取采样行索引集合
+     */
+    Set<Integer> getSampleIndices();
+
+    /**
+     * 获取采样参数说明（如比例0.2或数量100）
+     */
+    String getSamplingInfo();
 }
