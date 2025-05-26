@@ -3,7 +3,10 @@
  * @version 1.0
  * @since 2025/4/15
  */
+package algorithm;
+
 import model.DataSet;
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import pli.PLICache;
@@ -51,13 +54,13 @@ public class SearchSpaceTest {
         int columnCount = dataSet.getColumnCount();
 
         // 根节点应该有n-1个子节点（每个子节点代表一个属性）
-        assertEquals(columnCount-1, searchSpace.getRoot().getChildren().size());
+        Assertions.assertEquals(columnCount-1, searchSpace.getRoot().getChildren().size());
 
         // 打印NodeMap并检查节点数
         for (Node node: searchSpace.getNodeMap().values()) {
             System.out.println(node);
         }
-        assertEquals((int) Math.pow(2, columnCount - 1) - 1, searchSpace.getNodeMap().size());
+        Assertions.assertEquals((int) Math.pow(2, columnCount - 1) - 1, searchSpace.getNodeMap().size());
 
         // 检查每个子节点
         for (Node child : searchSpace.getRoot().getChildren()) {
@@ -70,10 +73,10 @@ public class SearchSpaceTest {
 
             // 检查子节点的子节点数量
             int expectedChildrenCount = columnCount - 2; // 除去当前属性和rhs属性
-            assertEquals(expectedChildrenCount, child.getChildren().size());
+            Assertions.assertEquals(expectedChildrenCount, child.getChildren().size());
 
             // 检查子节点的父节点数量
-            assertEquals(1, child.getParents().size());
+            Assertions.assertEquals(1, child.getParents().size());
 
 
         }

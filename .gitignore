@@ -37,3 +37,5 @@ build/
 /.lingma
 /deepseek
 /data
+/.cursorrules
+/.cursor/

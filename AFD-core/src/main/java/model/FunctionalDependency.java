@@ -15,12 +15,23 @@ import java.util.Set;
 public class FunctionalDependency {
     private final Set<Integer> lhs;  // 左侧属性集合
     private final int rhs;           // 右侧单个属性
+    private final double error;
 
     public FunctionalDependency(Set<Integer> determinantIndices,
                                 int dependentIndex) {
         validateIndices(determinantIndices, dependentIndex);
         this.lhs = Collections.unmodifiableSet(new HashSet<>(determinantIndices));
         this.rhs = dependentIndex;
+        this.error = 0;
+    }
+
+    public FunctionalDependency(Set<Integer> determinantIndices,
+                                int dependentIndex,
+                                double error) {
+        validateIndices(determinantIndices, dependentIndex);
+        this.lhs = Collections.unmodifiableSet(new HashSet<>(determinantIndices));
+        this.rhs = dependentIndex;
+        this.error = error;
     }
 
     private void validateIndices(Set<Integer> left, int right) {
@@ -40,9 +51,14 @@ public class FunctionalDependency {
         return rhs;
     }
 
+    public double getError() {
+        return error;
+    }
+
     // Equality checks
     @Override
     public boolean equals(Object o) {
+        // 仅判断LHS和RHS，不判断Error
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
         FunctionalDependency that = (FunctionalDependency) o;
@@ -56,9 +72,11 @@ public class FunctionalDependency {
 
     @Override
     public String toString() {
-        return String.format("%s → %d",
+        // 输出格式为：{1,2,3} → 4 (0.05)
+        return String.format("%s → %d (%f)",
                 formatIndices(lhs),
-                rhs);
+                rhs,
+                error);
     }
 
     private String formatIndices(Set<Integer> indices) {

@@ -1,3 +1,4 @@
+package algorithm;
 
 import measure.ErrorMeasure;
 import sampling.SamplingStrategy;

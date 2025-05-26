@@ -18,5 +18,40 @@
     </properties>
 
     <dependencies>
+        <dependency>
+            <groupId>com.example</groupId>
+            <artifactId>AFD-core</artifactId>
+            <version>1.0-SNAPSHOT</version>
+            <scope>compile</scope>
+        </dependency>
+        
+        <!-- 添加Pyro模块依赖 -->
+        <dependency>
+            <groupId>com.example</groupId>
+            <artifactId>pyro</artifactId>
+            <version>1.0-SNAPSHOT</version>
+            <scope>compile</scope>
+        </dependency>
+        
+        <!-- 添加TANE模块依赖 -->
+        <dependency>
+            <groupId>com.example</groupId>
+            <artifactId>tane</artifactId>
+            <version>1.0-SNAPSHOT</version>
+            <scope>compile</scope>
+        </dependency>
+
     </dependencies>
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <source>21</source>
+                    <target>21</target>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
 </project>

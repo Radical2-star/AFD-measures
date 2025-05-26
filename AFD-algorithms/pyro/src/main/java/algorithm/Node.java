@@ -1,3 +1,5 @@
+package algorithm;
+
 import model.FunctionalDependency;
 
 import java.util.BitSet;

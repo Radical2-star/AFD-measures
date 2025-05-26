@@ -1,18 +1,17 @@
+package algorithm;
+
 import model.DataSet;
 import model.FunctionalDependency;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import pli.PLICache;
 import utils.BitSetUtils;
-import utils.FunctionTimer;
 import utils.HittingSet;
 import utils.MaxFDTrie;
 import utils.MinFDTrie;
 import utils.MinMaxPair;
-import utils.Trie;
 
 import java.util.*;
-import java.util.stream.Collectors;
 
 import static utils.BitSetUtils.*;
 
@@ -31,7 +30,6 @@ public class SearchSpace {
     private final MinFDTrie minValidFD;
     private final MaxFDTrie maxNonFD;
     private final Set<BitSet> peaks; // TODO: 优化为Trie
-    private final FunctionTimer timer;
     private static final Logger logger = LoggerFactory.getLogger(SearchSpace.class);
 
     public SearchSpace(int rhs, DataSet dataSet, PLICache cache, PyroConfig config) {
@@ -44,7 +42,6 @@ public class SearchSpace {
         this.minValidFD = new MinFDTrie();
         this.maxNonFD = new MaxFDTrie();
         this.peaks = new HashSet<>();
-        this.timer = FunctionTimer.getInstance();
     }
 
     public void explore() {
@@ -72,36 +69,39 @@ public class SearchSpace {
         while (!launchpads.isEmpty()) {
             Node launchpad = launchpads.poll();
             logger.info("launchpad: {}", launchpad);
-            if (checkValidPrune(launchpad.getLhs())) {
-                continue;
-            }
+            boolean isValidPrune = checkValidPrune(launchpad.getLhs());
+            boolean isInvalidPrune = checkInvalidPrune(launchpad.getLhs());
+            Node peak;
             // 先检查launchpad是否被maxNonFD剪枝，如果已经被剪枝，则直接进入逃逸阶段
-            if (!checkInvalidPrune(launchpad.getLhs())) {
-                // launchpad需要直接验，如果有效，直接添加到minValidFD和peaks
-                validate(launchpad);
-                Node peak = null;
-                if (launchpad.isValid(config.getMaxError())) {
-                    peak = launchpad;
+            if (!isInvalidPrune) {
+                // 如果被validPrune，跳到trickleDown阶段
+                if (!isValidPrune) {
+                    // launchpad需要直接验，如果有效，直接添加到minValidFD和peaks
+                    validate(launchpad);
+                    if (launchpad.isValid(config.getMaxError())) {
+                        peak = launchpad;
+                    } else {
+                        MinMaxPair<Node> minMaxPair = new MinMaxPair<>(null, launchpad);
+                        // 上升，找到peak，并更新maxNonFD
+                        minMaxPair = ascend(minMaxPair);
+
+                        logger.info("上升到节点: {}", minMaxPair.getLeft());
+
+                        maxNonFD.add(minMaxPair.getRight().getLhs());
+                        logger.info("添加最大nonFD: {}", minMaxPair.getRight());
+                        peak = minMaxPair.getLeft();
+                    }
                 } else {
-                    MinMaxPair<Node> minMaxPair = new MinMaxPair<>(null, launchpad);
-                    // 上升，找到peak，并更新maxNonFD
-                    timer.start("ascend");
-                    minMaxPair = ascend(minMaxPair);
-                    timer.end("ascend");
-
-                    logger.info("上升到节点: {}", minMaxPair.getLeft());
-
-                    maxNonFD.add(minMaxPair.getRight().getLhs());
-                    logger.info("添加最大nonFD: {}", minMaxPair.getRight());
-                    peak = minMaxPair.getLeft();
+                    peak = launchpad;
                 }
-                if (peak != null) peaks.add(peak.getLhs());
-                // 下降，遍历peak覆盖的所有未剪枝节点，寻找最小FD
-                if (peak != null && peak.isValid(config.getMaxError())) {
-                    timer.start("trickleDown");
-                    trickleDown(peak);
-                    timer.end("trickleDown");
+                if (peak != null) {
+                    peaks.add(peak.getLhs());
+                    // 下降，遍历peak覆盖的所有未剪枝节点，寻找最小FD
+                    if (isValidPrune || peak.isValid(config.getMaxError())) {
+                        trickleDown(peak);
+                    }
                 }
+
             }
             // 逃逸
             BitSet launchpadLhs = launchpad.getLhs();
@@ -112,7 +112,6 @@ public class SearchSpace {
                 launchpads.add(escapeNode);
             }
         }
-        timer.printResults();
     }
 
     private MinMaxPair<Node> ascend(MinMaxPair<Node> currentPair) {
@@ -145,8 +144,11 @@ public class SearchSpace {
             return ascend(currentPair);
         } else { // 已经找到peak, 继续向上找maxNonFD
             // 这个maxNonFD是估计的，子节点还是有可能是nonFD
-            // 因为精确计算开销大，没有必要，但可以保证这是“尽可能高的”精确的NonFD
+            // 因为精确计算开销大，没有必要，但可以保证这是"尽可能高的"精确的NonFD
             Node maxNode = getMaxChildren(currentPair.getRight());
+            if (maxNode == null) {
+                return currentPair;
+            }
             validate(maxNode);
             if (maxNode.isInvalid(config.getMaxError())) {
                 currentPair.setRight(maxNode);
@@ -158,21 +160,21 @@ public class SearchSpace {
     }
 
     /*
-    private Node ascendSimple(Node currentNode) {
-        MinMaxPair<Node> currentPair = new MinMaxPair<>(null, currentNode);
+    private algorithm.Node ascendSimple(algorithm.Node currentNode) {
+        MinMaxPair<algorithm.Node> currentPair = new MinMaxPair<>(null, currentNode);
         // 创建并估计所有未被minValidFD剪枝的子节点，获得估计最大和最小的子节点
-        MinMaxPair<Node> minMaxPair = getMinMaxChildren(currentNode);
+        MinMaxPair<algorithm.Node> minMaxPair = getMinMaxChildren(currentNode);
         if (minMaxPair.isEmpty()) { // 说明全部被剪枝或到顶
             return currentPair;
         }
         // 验证最小节点
-        Node minNode = minMaxPair.getLeft();
+        algorithm.Node minNode = minMaxPair.getLeft();
         validate(minNode);
         if (minNode.isValid(config.getMaxError())) {
             // 最小节点有效，标记为peak，然后继续向上找maxNonFD
             // 这里是转折点，需要额外操作一次，节省一次计算maxNode. 逻辑和else的情况一致
             currentPair.setLeft(minNode);
-            Node maxNode = minMaxPair.getRight();
+            algorithm.Node maxNode = minMaxPair.getRight();
             validate(maxNode);
             if (maxNode.isInvalid(config.getMaxError())) {
                 currentPair.setRight(maxNode);
@@ -200,46 +202,67 @@ public class SearchSpace {
                         .thenComparingDouble(Node::getError)
         );
         queue.add(peak);
-        Set<BitSet> visited = new HashSet<>();
+        Set<BitSet> visited = new HashSet<>(); // 用于跟踪已处理过的节点 (LHS)
 
         while (!queue.isEmpty()) {
-            Node minNode = queue.peek();
-            if (minNode == root) {
+            Node currentNode = queue.peek(); // 查看队列顶部的节点，但不移除
+
+            if (currentNode == root) { // 根节点是特殊情况，不参与FD发现
                 queue.poll();
                 continue;
             }
-            // 先检查minNode本身是否被minValidFD剪枝
-            boolean isMinPruned = checkValidPrune(minNode.getLhs());
-            // 最小性判断：如果子节点都验证无效，则为最小
-            // 为此，验证通过时，不从队列中移除，并标记为visited
-            // 如果已经visited，说明子节点都被验证过一遍了，则为最小有效FD
-            if (isMinPruned) {
-                visited.add(minNode.getLhs());
-            }
-            if (visited.contains(minNode.getLhs())) {
-                queue.poll();
-                if (!isMinPruned) {
-                    logger.info("找到最小FD: {}", minNode);
-                    minValidFD.add(minNode.getLhs());
+
+            boolean isCurrentlyPruned = checkValidPrune(currentNode.getLhs());
+
+            if (visited.contains(currentNode.getLhs())) {
+                // 如果节点之前被处理过 (例如，被验证为valid并保留在队列中，或被剪枝并处理了父节点)
+                queue.poll(); // 从队列中移除
+                if (!isCurrentlyPruned) {
+                    // 如果它之前是valid的（意味着它在被标记visited时没有被poll），并且现在没有被一个更小的、新发现的FD剪枝，
+                    // 那么它就是一个最小FD。
+                    logger.info("找到最小FD: {}", currentNode);
+                    minValidFD.add(currentNode.getLhs());
                 }
+                // 父节点在它首次被标记为visited时（如果是valid）或被剪枝时已经加入队列探索，
+                // 所以这里可以直接continue。
                 continue;
             }
-            if (!isMinPruned) {
-                validate(minNode);
-                if (minNode.isValid(config.getMaxError())) {
-                    visited.add(minNode.getLhs());
+
+            // 节点是首次被处理 (即 !visited.contains(currentNode.getLhs()) )
+            // 首先标记为已访问，以避免在当前trickleDown调用中重复验证或基本处理。
+            visited.add(currentNode.getLhs());
+
+            if (isCurrentlyPruned) {
+                // 节点被minValidFD剪枝。
+                queue.poll(); // 从队列中移除，因为它不能成为最小FD。
+                // 虽然此节点被剪枝，但其父节点仍需探索。
+                // 将在下面的公共代码块中添加父节点。
+            } else {
+                // 节点未被剪枝，进行验证。
+                validate(currentNode);
+                if (currentNode.isValid(config.getMaxError())) {
+                    // 节点有效。
+                    // 不从队列中 poll() 它。它将被保留，
+                    // 当它再次成为队列头部时，会进入上面的 visited.contains() 分支进行最小性判断。
+                    // 其父节点也需要被探索。
                 } else {
-                    queue.poll();
-                    continue;
+                    // 节点无效。
+                    queue.poll(); // 从队列中移除。
+                    // 无效节点的父节点不应通过此特定无效路径进行探索。
+                    // 如果其父节点本身是有效的，它们将通过从 peak 开始的其他路径被处理。
+                    continue; // 跳过添加父节点的步骤。
                 }
             }
-            // 即使被minValidFD剪枝，也需要把父节点加入队列，防止遗漏
-            // 如果验证无效则不需要加入队列
-            List<BitSet> parentsLhs = getAllParents(minNode.getLhs());
+
+            // 对于未因"无效"或"已充分处理的visited"而continue的节点（即有效的、或被剪枝的节点），
+            // 将其所有父节点加入队列进行探索。
+            List<BitSet> parentsLhs = getAllParents(currentNode.getLhs());
             for (BitSet parentLhs : parentsLhs) {
                 Node parentNode = getOrCreateNode(parentLhs);
-                estimate(parentNode);
-                queue.add(parentNode);
+                if (!visited.contains(parentLhs)) {
+                    estimate(parentNode);
+                    queue.add(parentNode);
+                }
             }
         }
     }
@@ -337,6 +360,9 @@ public class SearchSpace {
 
     private List<BitSet> getAllParents(BitSet lhs) {
         List<BitSet> result = new ArrayList<>();
+        if (lhs.isEmpty()) { // 空集的父节点就是它自己（或没有严格意义的父节点）
+            return result; // 返回空列表，避免进一步处理
+        }
         for (int i = lhs.nextSetBit(0); i >= 0; i = lhs.nextSetBit(i + 1)) {
             BitSet newLhs = (BitSet) lhs.clone();
             newLhs.clear(i);
@@ -398,6 +424,10 @@ public class SearchSpace {
         List<BitSet> minLhs = minValidFD.toList(dataSet.getColumnCount());
         for (BitSet lhs: minLhs) {
             Node node = getOrCreateNode(lhs);
+            if (!node.isValidated()) {
+                validate(node); // 确保error是最新的精确值
+                throw new RuntimeException(node + " should be validated");
+            }
             result.add(node);
         }
         result.sort(Comparator.comparingDouble(Node::getError));
@@ -408,17 +438,24 @@ public class SearchSpace {
         List<FunctionalDependency> result = new ArrayList<>();
         List<BitSet> minLhs = minValidFD.toList(dataSet.getColumnCount());
         for (BitSet lhs : minLhs) {
-            result.add(new FunctionalDependency(bitSetToSet(lhs), rhs));
+            Node node = getOrCreateNode(lhs);
+            if (!node.isValidated()) {
+                validate(node); // 确保 FD 的 error 是准确的
+                throw new RuntimeException(node + " should be validated");
+            }
+            result.add(new FunctionalDependency(bitSetToSet(lhs), rhs, node.getError()));
         }
+        // 可以根据error排序
+        result.sort(Comparator.comparingDouble(FunctionalDependency::getError));
         return result;
     }
 
     // 测试用方法
-    Node getRoot(){
+    protected Node getRoot(){
         return root;
     }
 
-    Map<BitSet, Node> getNodeMap(){
+    protected Map<BitSet, Node> getNodeMap(){
         return nodeMap;
     }
 
@@ -433,14 +470,14 @@ public class SearchSpace {
         buildTreeRecursive(root, attributes);
     }
 
-    private void buildTreeRecursive(Node parent, Set<Integer> attributes) {
+    private void buildTreeRecursive(algorithm.Node parent, Set<Integer> attributes) {
         for (Integer attr : attributes) {
             if (parent.getLhs().get(attr)) {
                 continue;
             }
             BitSet newLhs = (BitSet) parent.getLhs().clone();
             newLhs.set(attr);
-            Node child = nodeMap.computeIfAbsent(newLhs, l -> new Node(l, rhs));
+            algorithm.Node child = nodeMap.computeIfAbsent(newLhs, l -> new algorithm.Node(l, rhs));
             parent.addChild(child);
             Set<Integer> remainingAttributes = new HashSet<>(attributes);
             remainingAttributes.remove(attr);

@@ -52,6 +52,7 @@ public class G3Measure implements ErrorMeasure {
             // 4.1 统计当前簇中rhs属性值的分布
             for (int row : cluster) {
                 int yVal = vY[row];
+                if (yVal == 0) continue; // 去除单例
                 freqCounter.put(yVal, freqCounter.getOrDefault(yVal, 0) + 1);
             }
 
@@ -78,7 +79,7 @@ public class G3Measure implements ErrorMeasure {
     public double estimateError(BitSet lhs, int rhs, DataSet data, PLICache cache, SamplingStrategy strategy) {
         // TODO: 未测试estimate逻辑
         // 应用采样策略
-        strategy.initialize(data, 0.2); // 示例使用20%比例采样
+        strategy.initialize(data, 0.05); // 示例使用20%比例采样
         Set<Integer> sampleRows = strategy.getSampleIndices();
 
         // 获取原始PLI信息
@@ -101,13 +102,17 @@ public class G3Measure implements ErrorMeasure {
             Map<Integer, Integer> counter = new HashMap<>();
             for (int row : sampledCluster) {
                 int yVal = rhsVector[row];
+                if (yVal == 0) continue; // 去除单例
                 counter.put(yVal, counter.getOrDefault(yVal, 0) + 1);
             }
 
             int maxCount = counter.values().stream()
                     .max(Integer::compare).orElse(0);
             if (maxCount == 0) {
-                sampleViolations += (sampledCluster.size() - 1);
+                // sampledCluster是有可能等于0的，因为采样可能都没采到
+                if (!sampledCluster.isEmpty()) {
+                    sampleViolations += (sampledCluster.size() - 1);
+                }
             } else {
                 sampleViolations += (sampledCluster.size() - maxCount);
             }
