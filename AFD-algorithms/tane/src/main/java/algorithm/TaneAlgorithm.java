@@ -26,6 +26,11 @@ public class TaneAlgorithm {
     private DataSet dataSet;
     private String infile;
     private Double threshold;
+    private static int validateCount = 0;
+
+    public static int getValidateCount() {
+        return validateCount;
+    }
 
 
     public TaneAlgorithm() {
@@ -41,11 +46,11 @@ public class TaneAlgorithm {
         try (BufferedReader br = new BufferedReader(new FileReader(filename))) {
             line = br.readLine();
             if (line != null) {
-                // 处理CSV头部，去除空格
-                listOfColumns = Arrays.stream(line.split(","))
-                        .map(String::trim)
-                        .collect(Collectors.toList());
-
+                int columnCount = line.split(",").length;
+                listOfColumns = new ArrayList<>();
+                for (int i = 0; i < columnCount; i++) {
+                    listOfColumns.add(String.valueOf((char) ('A' + i)));
+                }
                 while ((line = br.readLine()) != null) {
                     String[] values = line.split(",");
                     Map<String, Object> row = new HashMap<>();
@@ -215,6 +220,7 @@ public class TaneAlgorithm {
         Integer r=indicesZ.get(0);
 
         double error = new G3Measure().calculateError(targetColumns, r, dataSet, cache);
+        validateCount++;
         return error;
     }
     public boolean validFD(String y, String z) {
@@ -469,7 +475,7 @@ public class TaneAlgorithm {
         while (!L.get(l).isEmpty()) {
             computeDependencies(L.get(l), new ArrayList<>(listOfColumns));
 
-            prune(L.get(l));
+//            prune(L.get(l));
 
             List<String> temp = generateNextLevel(L.get(l));
 
@@ -490,6 +496,7 @@ public class TaneAlgorithm {
             System.out.println("[" + fd.get(0) + " -> " + fd.get(1) + "] error: " + error);
         }
         System.out.println("总共找到 " + finalListOfFDs.size() + " 个函数依赖");
+        System.out.println("验证次数：" + getValidateCount());
     }
 
     /**
@@ -527,11 +534,11 @@ public class TaneAlgorithm {
     }
 
     public static void main(String[] args) {
-        String infile = "data/abalone.csv";
+        String infile = "data/atom_new.csv";
         if (args.length > 0) {
             infile = args[0];
         }
-        Double threshold = 0.0;
+        Double threshold = 0.05;
         TaneAlgorithm tane = new TaneAlgorithm();
         try {
             //统计时间

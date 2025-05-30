@@ -18,7 +18,7 @@ import java.util.*;
  * @since 2025/5/10
  */
 public class CompareAlgorithms {
-    private static final String DATA_PATH = "data/abalone.csv";
+    private static final String DATA_PATH = "data/atom_new.csv";
     private static final double ERROR_THRESHOLD = 0.05;
     
     public static void main(String[] args) {

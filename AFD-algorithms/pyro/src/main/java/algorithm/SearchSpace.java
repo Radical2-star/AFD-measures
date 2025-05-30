@@ -32,6 +32,12 @@ public class SearchSpace {
     private final Set<BitSet> peaks; // TODO: 优化为Trie
     private static final Logger logger = LoggerFactory.getLogger(SearchSpace.class);
 
+    public static int getValidateCount() {
+        return validateCount;
+    }
+
+    private static int validateCount = 0;
+
     public SearchSpace(int rhs, DataSet dataSet, PLICache cache, PyroConfig config) {
         this.rhs = rhs;
         this.dataSet = dataSet;
@@ -46,13 +52,13 @@ public class SearchSpace {
 
     public void explore() {
         logger.info("开始搜索, rhs = {}", rhs);
-        // 判断是否为近似UCC，如果是，则整个搜索空间被剪枝
-        validate(root);
+        // 判断是否为近似UCC，如果是，则可以剪枝掉其他搜索空间中LHS包含的情况？
+        // validate(root);
         logger.info("root: {}", root);
-        if (root.isValid(config.getMaxError())) {
-            minValidFD.add(root.getLhs());
-            return;
-        }
+        // if (root.isValid(config.getMaxError())) {
+        //     minValidFD.add(root.getLhs());
+        //     return;
+        // }
 
         // 初始化launchpads
         PriorityQueue<Node> launchpads = new PriorityQueue<>();
@@ -412,6 +418,7 @@ public class SearchSpace {
         if (node.isValidated()) return;
         node.setError(config.getMeasure().calculateError(node.getLhs(), rhs, dataSet, cache));
         node.setValidated();
+        validateCount++;
     }
 
     private void estimate(Node node) {

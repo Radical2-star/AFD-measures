@@ -24,7 +24,7 @@ public class Pyro {
     private final DataSet dataset;
     private final PyroConfig config;
     private final PLICache pliCache;
-    private static final String dataPath = "data/abalone.csv";
+    private static final String dataPath = "data/atom_new.csv";
     private static final double maxError = 0.05;
 
     public Pyro(DataSet dataset, PyroConfig config) {
@@ -43,6 +43,8 @@ public class Pyro {
             searchSpace.explore();
             result.addAll(searchSpace.getValidatedNodes());
         }
+
+        System.out.println("验证次数：" + SearchSpace.getValidateCount());
 
         return result;
     }
