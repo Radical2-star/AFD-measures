@@ -3,9 +3,7 @@ package algorithm;
 import model.FunctionalDependency;
 
 import java.util.BitSet;
-import java.util.HashSet;
 import java.util.Objects;
-import java.util.Set;
 
 import static utils.BitSetUtils.*;
 
@@ -20,20 +18,10 @@ public class Node implements Comparable<Node>{
     private final int level;
     private boolean isValidated;
     private double error;
-    private final Set<Node> children;
-    private final Set<Node> parents;
 
     {
         this.isValidated = false;
         this.error = Double.MAX_VALUE; // 注意度量不一定保证error <= 1.0
-        this.children = new HashSet<>();
-        this.parents = new HashSet<>();
-    }
-
-    public Node(Set<Integer> lhs, int rhs) {
-        this.lhs = setToBitSet(lhs);
-        this.rhs = rhs;
-        this.level = lhs.size();
     }
 
     public Node(BitSet lhs, int rhs) {
@@ -42,41 +30,17 @@ public class Node implements Comparable<Node>{
         this.level = lhs.cardinality(); // TODO: 这里影响性能
     }
 
-    public Node(BitSet lhs, int rhs, int level) {
-        this.lhs = lhs;
-        this.rhs = rhs;
-        this.level = level;
-    }
-
-    public void addChild(Node child) {
-        this.children.add(child);
-        child.addParentOnly(this);
-    }
-
-    public void addParent(Node parent) {
-        this.parents.add(parent);
-        parent.addChildOnly(this);
-    }
-
-    public void deleteParent(Node parent) {
-        this.parents.remove(parent);
-        parent.deleteChildOnly(this);
-    }
-    public void addChildOnly(Node child) {
-        this.children.add(child);
-    }
-
-    public void addParentOnly(Node parent) {
-        this.parents.add(parent);
-    }
-
-    public void deleteChildOnly(Node child) {
-        this.children.remove(child);
-    }
-
-    public void deleteParentOnly(Node parent) {
-        this.parents.remove(parent);
-    }
+    // public Node(BitSet lhs, int rhs, int level) {
+    //     this.lhs = lhs;
+    //     this.rhs = rhs;
+    //     this.level = level;
+    // }
+    //
+    // public Node(Set<Integer> lhs, int rhs) {
+    //     this.lhs = setToBitSet(lhs);
+    //     this.rhs = rhs;
+    //     this.level = lhs.size();
+    // }
 
     public BitSet getLhs() {
         return lhs;
@@ -92,14 +56,6 @@ public class Node implements Comparable<Node>{
 
     public double getError() {
         return error;
-    }
-
-    public Set<Node> getChildren(){
-        return children;
-    }
-
-    public Set<Node> getParents(){
-        return parents;
     }
 
     public boolean isEstimated() {
@@ -127,7 +83,7 @@ public class Node implements Comparable<Node>{
     }
 
     public FunctionalDependency toFD() {
-        return new FunctionalDependency(bitSetToSet(lhs), rhs);
+        return new FunctionalDependency(bitSetToSet(lhs), rhs, error);
     }
 
     @Override

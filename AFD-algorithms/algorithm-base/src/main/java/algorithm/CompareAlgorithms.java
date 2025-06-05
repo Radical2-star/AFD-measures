@@ -18,7 +18,7 @@ import java.util.*;
  * @since 2025/5/10
  */
 public class CompareAlgorithms {
-    private static final String DATA_PATH = "data/1_CLASSIFICATION_new.csv";
+    private static final String DATA_PATH = "data/test_new.csv";
     private static final double ERROR_THRESHOLD = 0.05;
     
     public static void main(String[] args) {
@@ -96,7 +96,7 @@ public class CompareAlgorithms {
     /**
      * 运行Pyro算法
      * @param dataset 数据集
-     * @return 函数依赖集合
+     * @return 函数依赖列表
      */
     private static Set<FunctionalDependency> runPyro(DataSet dataset) {
         // 创建Pyro算法实例并运行
@@ -106,9 +106,7 @@ public class CompareAlgorithms {
                         new sampling.RandomSampling(),
                         ERROR_THRESHOLD
                 ));
-        
-        List<Node> nodeResults = pyro.discover();
-        return pyro.convertToFDSet(nodeResults);
+        return new HashSet<>(pyro.discover());
     }
     
     /**

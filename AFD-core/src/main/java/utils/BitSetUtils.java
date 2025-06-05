@@ -45,6 +45,22 @@ public class BitSetUtils {
         return set;
     }
 
+    /**
+     * Converts a BitSet to its long representation.
+     * Assumes the number of bits in use (column count) is less than 64.
+     * @param bs The BitSet to convert.
+     * @param numColumns The total number of columns, to ensure iteration bounds.
+     * @return A long representing the BitSet.
+     */
+    public static long bitSetToLong(BitSet bs, int numColumns) {
+        long value = 0L;
+        // Iterate only up to numColumns to avoid issues if BitSet has bits set beyond numColumns
+        for (int i = bs.nextSetBit(0); i >= 0 && i < numColumns; i = bs.nextSetBit(i + 1)) {
+            value |= (1L << i);
+        }
+        return value;
+    }
+
     public static boolean isSubSet(BitSet subSet, BitSet superSet) {
         BitSet temp = (BitSet) subSet.clone();
         temp.and(superSet);

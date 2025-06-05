@@ -1,6 +1,7 @@
 package algorithm;
 
 import model.DataSet;
+import model.FunctionalDependency;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import pli.PLICache;
@@ -25,13 +26,19 @@ public class SearchSpace {
     private final PyroConfig config;
     private final PLICache cache;
     private final Node root;
-    private final Map<BitSet, Node> nodeMap;
+
+    // 存储节点的辅助结构
+    private final Map<Long, Integer> lhsToIdMap;
+    private final List<Node> nodeList;
+    private int nextNodeId;
+
     private final MinFDTrie minValidFD;
     private final MaxFDTrie maxNonFD;
     private final Set<BitSet> peaks; // TODO: 优化为Trie
+
     private static final Logger logger = LoggerFactory.getLogger(SearchSpace.class);
 
-    public static int getValidateCount() {
+    public static int getValidateCount() { // 测试用，统计验证次数
         return validateCount;
     }
 
@@ -42,11 +49,19 @@ public class SearchSpace {
         this.dataSet = dataSet;
         this.cache = cache;
         this.config = config;
-        this.nodeMap = new HashMap<>();
-        this.root = getOrCreateNode(new BitSet(dataSet.getColumnCount()));
+
+        if (dataSet.getColumnCount() > 63) {
+            logger.warn("数据集的列数 ({}) 大于63，使用Long作为键的优化不适用。", dataSet.getColumnCount());
+        }
+
+        this.lhsToIdMap = new HashMap<>();
+        this.nodeList = new ArrayList<>();
+        this.nextNodeId = 0;
+
         this.minValidFD = new MinFDTrie();
         this.maxNonFD = new MaxFDTrie();
         this.peaks = new HashSet<>();
+        this.root = getOrCreateNode(new BitSet(dataSet.getColumnCount()));
     }
 
     public void explore() {
@@ -258,7 +273,6 @@ public class SearchSpace {
         return result;
     }
 
-
     private boolean checkValidPrune(BitSet lhs) {
         return minValidFD.containsSubSetOf(bitSetToList(lhs));
     }
@@ -267,8 +281,29 @@ public class SearchSpace {
         return maxNonFD.containsSuperSetOf(bitSetToList(lhs));
     }
 
-    private Node getOrCreateNode(BitSet lhs) {
-        return nodeMap.computeIfAbsent(lhs, k -> new Node(lhs, rhs));
+    private Node getOrCreateNode(BitSet lhsBitSet) {
+        long longKey = BitSetUtils.bitSetToLong(lhsBitSet, dataSet.getColumnCount());
+        
+        // 使用 computeIfAbsent 来获取或创建ID
+        int nodeId = lhsToIdMap.computeIfAbsent(longKey, k -> {
+            // 注意：这里不能直接在 lambda 表达式中修改 nodeList，
+            // 因为 computeIfAbsent 的 lambda 是为了生成 Map 的 value (即 Integer)。
+            // 我们需要先获得 ID，然后再处理 nodeList。
+            return nextNodeId++; // 返回新的ID
+        });
+
+        // 此时 nodeId 肯定存在，可能是旧的，也可能是刚通过 lambda 创建的新的
+        if (nodeId >= nodeList.size()) { 
+            // 这是一个新节点，nodeId 是刚分配的，nodeList中还没有这个索引
+            // 需要确保 nodeList 扩展到能容纳这个新 ID
+            // (理论上，如果 nextNodeId 和 nodeList.size() 同步增长，这里add的应该是正确的)
+            Node newNode = new Node(lhsBitSet, rhs);
+            nodeList.add(newNode); // 假设 add 后 newNode 的索引就是 nodeId
+            return newNode;
+        } else {
+            // 节点已存在
+            return nodeList.get(nodeId);
+        }
     }
 
     private MinMaxPair<Node> getMinMaxChildren(Node node) {
@@ -370,55 +405,23 @@ public class SearchSpace {
         node.setError(config.getMeasure().estimateError(node.getLhs(), rhs, dataSet, cache, config.getSamplingStrategy()));
     }
 
-    public List<Node> getValidatedNodes() {
-        List<Node> result = new ArrayList<>();
+    public List<FunctionalDependency> getValidatedFDs() {
+        List<FunctionalDependency> result = new ArrayList<>();
         List<BitSet> minLhs = minValidFD.toList(dataSet.getColumnCount());
-        for (BitSet lhs: minLhs) {
+        for (BitSet lhs : minLhs) {
             Node node = getOrCreateNode(lhs);
-            if (!node.isValidated()) {
-                validate(node); // 确保error是最新的精确值
-                throw new RuntimeException(node + " should be validated");
-            }
-            result.add(node);
+            result.add(node.toFD());
         }
-        result.sort(Comparator.comparingDouble(Node::getError));
         return result;
     }
 
     // 测试用方法
-    protected Node getRoot(){
-        return root;
-    }
-
-    protected Map<BitSet, Node> getNodeMap(){
-        return nodeMap;
-    }
-
-    /* 复杂度太高 已废弃
-    private void buildTree() {
-        Set<Integer> attributes = new HashSet<>();
-        for (int i = 0; i < dataSet.getColumnCount(); i++) {
-            if (i != rhs) {
-                attributes.add(i);
-            }
-        }
-        buildTreeRecursive(root, attributes);
-    }
-
-    private void buildTreeRecursive(algorithm.Node parent, Set<Integer> attributes) {
-        for (Integer attr : attributes) {
-            if (parent.getLhs().get(attr)) {
-                continue;
-            }
-            BitSet newLhs = (BitSet) parent.getLhs().clone();
-            newLhs.set(attr);
-            algorithm.Node child = nodeMap.computeIfAbsent(newLhs, l -> new algorithm.Node(l, rhs));
-            parent.addChild(child);
-            Set<Integer> remainingAttributes = new HashSet<>(attributes);
-            remainingAttributes.remove(attr);
-            buildTreeRecursive(child, remainingAttributes);
-        }
-    }
-    */
+    // protected Node getRoot(){
+    //     return root;
+    // }
+    //
+    // protected List<Node> getNodeList() {
+    //     return nodeList;
+    // }
 
 }
