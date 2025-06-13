@@ -1,7 +1,6 @@
 package algorithm;
 
 import model.DataSet;
-import model.FunctionalDependency;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import pli.PLICache;
@@ -32,6 +31,12 @@ public class SearchSpace {
     private final Set<BitSet> peaks; // TODO: 优化为Trie
     private static final Logger logger = LoggerFactory.getLogger(SearchSpace.class);
 
+    public static int getValidateCount() {
+        return validateCount;
+    }
+
+    private static int validateCount = 0;
+
     public SearchSpace(int rhs, DataSet dataSet, PLICache cache, PyroConfig config) {
         this.rhs = rhs;
         this.dataSet = dataSet;
@@ -46,13 +51,7 @@ public class SearchSpace {
 
     public void explore() {
         logger.info("开始搜索, rhs = {}", rhs);
-        // 判断是否为近似UCC，如果是，则整个搜索空间被剪枝
-        validate(root);
         logger.info("root: {}", root);
-        if (root.isValid(config.getMaxError())) {
-            minValidFD.add(root.getLhs());
-            return;
-        }
 
         // 初始化launchpads
         PriorityQueue<Node> launchpads = new PriorityQueue<>();
@@ -159,36 +158,6 @@ public class SearchSpace {
         }
     }
 
-    /*
-    private algorithm.Node ascendSimple(algorithm.Node currentNode) {
-        MinMaxPair<algorithm.Node> currentPair = new MinMaxPair<>(null, currentNode);
-        // 创建并估计所有未被minValidFD剪枝的子节点，获得估计最大和最小的子节点
-        MinMaxPair<algorithm.Node> minMaxPair = getMinMaxChildren(currentNode);
-        if (minMaxPair.isEmpty()) { // 说明全部被剪枝或到顶
-            return currentPair;
-        }
-        // 验证最小节点
-        algorithm.Node minNode = minMaxPair.getLeft();
-        validate(minNode);
-        if (minNode.isValid(config.getMaxError())) {
-            // 最小节点有效，标记为peak，然后继续向上找maxNonFD
-            // 这里是转折点，需要额外操作一次，节省一次计算maxNode. 逻辑和else的情况一致
-            currentPair.setLeft(minNode);
-            algorithm.Node maxNode = minMaxPair.getRight();
-            validate(maxNode);
-            if (maxNode.isInvalid(config.getMaxError())) {
-                currentPair.setRight(maxNode);
-            } else {
-                return currentPair;
-            }
-        } else {
-            // 最小节点无效，说明爬的不够高，继续向上找
-            currentPair.setRight(minNode);
-        }
-        return ascendSimple(currentNode);
-    }
-    */
-
     private void trickleDown(Node peak) {
         // 需要覆盖到peak下方的所有节点，用优先队列存储所有祖先节点
         // 1. 获取所有未被剪枝的父节点，加入优先队列
@@ -212,12 +181,13 @@ public class SearchSpace {
                 continue;
             }
 
-            boolean isCurrentlyPruned = checkValidPrune(currentNode.getLhs());
+            boolean isValidPruned = checkValidPrune(currentNode.getLhs());
+            boolean isInvalidPruned = checkInvalidPrune(currentNode.getLhs());
 
             if (visited.contains(currentNode.getLhs())) {
                 // 如果节点之前被处理过 (例如，被验证为valid并保留在队列中，或被剪枝并处理了父节点)
                 queue.poll(); // 从队列中移除
-                if (!isCurrentlyPruned) {
+                if (!isValidPruned) {
                     // 如果它之前是valid的（意味着它在被标记visited时没有被poll），并且现在没有被一个更小的、新发现的FD剪枝，
                     // 那么它就是一个最小FD。
                     logger.info("找到最小FD: {}", currentNode);
@@ -232,21 +202,23 @@ public class SearchSpace {
             // 首先标记为已访问，以避免在当前trickleDown调用中重复验证或基本处理。
             visited.add(currentNode.getLhs());
 
-            if (isCurrentlyPruned) {
+            if (isValidPruned) {
                 // 节点被minValidFD剪枝。
                 queue.poll(); // 从队列中移除，因为它不能成为最小FD。
                 // 虽然此节点被剪枝，但其父节点仍需探索。
                 // 将在下面的公共代码块中添加父节点。
+            } else if (isInvalidPruned) {
+                // 节点被maxNonFD剪枝。
+                queue.poll(); // 从队列中移除，因为它不能成为FD。
+                continue; // 无需探索其父节点。
             } else {
                 // 节点未被剪枝，进行验证。
                 validate(currentNode);
-                if (currentNode.isValid(config.getMaxError())) {
-                    // 节点有效。
-                    // 不从队列中 poll() 它。它将被保留，
-                    // 当它再次成为队列头部时，会进入上面的 visited.contains() 分支进行最小性判断。
-                    // 其父节点也需要被探索。
-                } else {
-                    // 节点无效。
+                // 如果节点有效，不从队列中 poll() 它。它将被保留，
+                // 当它再次成为队列头部时，会进入上面的 visited.contains() 分支进行最小性判断。
+                // 其父节点也需要被探索。
+                // 所以只需要处理节点无效的情况。
+                if (!currentNode.isValid(config.getMaxError())) {
                     queue.poll(); // 从队列中移除。
                     // 无效节点的父节点不应通过此特定无效路径进行探索。
                     // 如果其父节点本身是有效的，它们将通过从 peak 开始的其他路径被处理。
@@ -264,25 +236,6 @@ public class SearchSpace {
                     queue.add(parentNode);
                 }
             }
-        }
-    }
-
-    private void trickleDownSimple(Node peak) {
-        // 简单版：全部遍历全部验证
-        List<BitSet> parentsLhs = getAllParents(peak.getLhs());
-        boolean hasValidParent = false;
-        for (BitSet parentLhs : parentsLhs) {
-            Node parentNode = getOrCreateNode(parentLhs);
-            validate(parentNode);
-            if (parentNode.isValid(config.getMaxError())) {
-                hasValidParent = true;
-                trickleDownSimple(parentNode);
-            } else {
-                maxNonFD.add(parentNode.getLhs());
-            }
-        }
-        if (!hasValidParent) {
-            minValidFD.add(peak.getLhs());
         }
     }
 
@@ -305,9 +258,6 @@ public class SearchSpace {
         return result;
     }
 
-    private boolean checkPruned(BitSet lhs) {
-        return checkValidPrune(lhs) || checkInvalidPrune(lhs);
-    }
 
     private boolean checkValidPrune(BitSet lhs) {
         return minValidFD.containsSubSetOf(bitSetToList(lhs));
@@ -412,6 +362,7 @@ public class SearchSpace {
         if (node.isValidated()) return;
         node.setError(config.getMeasure().calculateError(node.getLhs(), rhs, dataSet, cache));
         node.setValidated();
+        validateCount++;
     }
 
     private void estimate(Node node) {
@@ -431,22 +382,6 @@ public class SearchSpace {
             result.add(node);
         }
         result.sort(Comparator.comparingDouble(Node::getError));
-        return result;
-    }
-
-    public List<FunctionalDependency> getValidatedFDs() {
-        List<FunctionalDependency> result = new ArrayList<>();
-        List<BitSet> minLhs = minValidFD.toList(dataSet.getColumnCount());
-        for (BitSet lhs : minLhs) {
-            Node node = getOrCreateNode(lhs);
-            if (!node.isValidated()) {
-                validate(node); // 确保 FD 的 error 是准确的
-                throw new RuntimeException(node + " should be validated");
-            }
-            result.add(new FunctionalDependency(bitSetToSet(lhs), rhs, node.getError()));
-        }
-        // 可以根据error排序
-        result.sort(Comparator.comparingDouble(FunctionalDependency::getError));
         return result;
     }
 
