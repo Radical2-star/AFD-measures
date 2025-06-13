@@ -26,6 +26,7 @@ public class TaneAlgorithm {
     private DataSet dataSet;
     private String infile;
     private Double threshold;
+    private int valid_count;
 
 
     public TaneAlgorithm() {
@@ -41,11 +42,11 @@ public class TaneAlgorithm {
         try (BufferedReader br = new BufferedReader(new FileReader(filename))) {
             line = br.readLine();
             if (line != null) {
-                // 处理CSV头部，去除空格
-                listOfColumns = Arrays.stream(line.split(","))
-                        .map(String::trim)
-                        .collect(Collectors.toList());
-
+                int columnCount = line.split(",").length;
+                listOfColumns = new ArrayList<>();
+                for (int i = 0; i < columnCount; i++) {
+                    listOfColumns.add(String.valueOf((char) ('A' + i)));
+                }
                 while ((line = br.readLine()) != null) {
                     String[] values = line.split(",");
                     Map<String, Object> row = new HashMap<>();
@@ -208,6 +209,7 @@ public class TaneAlgorithm {
         return indices;
     }
     public Double g3(String y,String z){
+        valid_count+=1;
         //计算它们的g3误差，首先将y表示为0-n的数字，表示第i列
         List<Integer> indices = getIndices(y, listOfColumns);
         BitSet targetColumns = BitSetUtils.listToBitSet(indices);
@@ -228,6 +230,13 @@ public class TaneAlgorithm {
         else{
             return false;
         }
+
+//        // === 动态阈值 ===
+//        List<Integer> lhsIndices = getIndices(y, listOfColumns);
+//        List<Integer> rhsIndices = getIndices(z, listOfColumns);
+//        double alpha = measure.DynamicThreshold.computeAlpha(dataSet,lhsIndices, rhsIndices);
+//
+//        return error <= alpha;
 
     }
 
@@ -443,6 +452,7 @@ public class TaneAlgorithm {
     }
 
     public void run(Double threshold) {
+        valid_count=0;
         this.threshold = threshold;
         System.out.println("开始运行TANE算法...");
         System.out.println("数据大小: " + totalTuples + " 行, " + listOfColumns.size() + " 列");
@@ -469,7 +479,7 @@ public class TaneAlgorithm {
         while (!L.get(l).isEmpty()) {
             computeDependencies(L.get(l), new ArrayList<>(listOfColumns));
 
-            prune(L.get(l));
+//            prune(L.get(l));
 
             List<String> temp = generateNextLevel(L.get(l));
 
@@ -527,11 +537,12 @@ public class TaneAlgorithm {
     }
 
     public static void main(String[] args) {
-        String infile = "data/abalone.csv";
+        String infile = "data/atom_new.csv";
         if (args.length > 0) {
             infile = args[0];
         }
-        Double threshold = 0.0;
+
+        Double threshold = 0.05;
         TaneAlgorithm tane = new TaneAlgorithm();
         try {
             //统计时间
@@ -556,6 +567,7 @@ public class TaneAlgorithm {
             
             long endTime = System.currentTimeMillis();
             System.out.println("运行时间: " + (endTime - startTime) + "ms");
+            System.out.println("valid_count: "+tane.valid_count);
         } catch (IOException e) {
             System.err.println("错误: " + e.getMessage());
             e.printStackTrace();
