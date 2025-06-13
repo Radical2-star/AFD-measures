@@ -26,11 +26,7 @@ public class TaneAlgorithm {
     private DataSet dataSet;
     private String infile;
     private Double threshold;
-    private static int validateCount = 0;
-
-    public static int getValidateCount() {
-        return validateCount;
-    }
+    private int valid_count;
 
 
     public TaneAlgorithm() {
@@ -213,6 +209,7 @@ public class TaneAlgorithm {
         return indices;
     }
     public Double g3(String y,String z){
+        valid_count+=1;
         //计算它们的g3误差，首先将y表示为0-n的数字，表示第i列
         List<Integer> indices = getIndices(y, listOfColumns);
         BitSet targetColumns = BitSetUtils.listToBitSet(indices);
@@ -220,7 +217,6 @@ public class TaneAlgorithm {
         Integer r=indicesZ.get(0);
 
         double error = new G3Measure().calculateError(targetColumns, r, dataSet, cache);
-        validateCount++;
         return error;
     }
     public boolean validFD(String y, String z) {
@@ -234,6 +230,13 @@ public class TaneAlgorithm {
         else{
             return false;
         }
+
+//        // === 动态阈值 ===
+//        List<Integer> lhsIndices = getIndices(y, listOfColumns);
+//        List<Integer> rhsIndices = getIndices(z, listOfColumns);
+//        double alpha = measure.DynamicThreshold.computeAlpha(dataSet,lhsIndices, rhsIndices);
+//
+//        return error <= alpha;
 
     }
 
@@ -449,6 +452,7 @@ public class TaneAlgorithm {
     }
 
     public void run(Double threshold) {
+        valid_count=0;
         this.threshold = threshold;
         System.out.println("开始运行TANE算法...");
         System.out.println("数据大小: " + totalTuples + " 行, " + listOfColumns.size() + " 列");
@@ -496,7 +500,6 @@ public class TaneAlgorithm {
             System.out.println("[" + fd.get(0) + " -> " + fd.get(1) + "] error: " + error);
         }
         System.out.println("总共找到 " + finalListOfFDs.size() + " 个函数依赖");
-        System.out.println("验证次数：" + getValidateCount());
     }
 
     /**
@@ -538,6 +541,7 @@ public class TaneAlgorithm {
         if (args.length > 0) {
             infile = args[0];
         }
+
         Double threshold = 0.05;
         TaneAlgorithm tane = new TaneAlgorithm();
         try {
@@ -563,6 +567,7 @@ public class TaneAlgorithm {
             
             long endTime = System.currentTimeMillis();
             System.out.println("运行时间: " + (endTime - startTime) + "ms");
+            System.out.println("valid_count: "+tane.valid_count);
         } catch (IOException e) {
             System.err.println("错误: " + e.getMessage());
             e.printStackTrace();

@@ -15,11 +15,39 @@ public class DataSet {
     private final List<List<String>> rows;
     private final int columnCount;
 
+    private final List<Double> errorRates;
+
+
     public DataSet(List<String> columnHeaders) {
         this.columnHeaders = columnHeaders;
         this.columnCount = columnHeaders.size();
         this.rows = new ArrayList<>();
+        this.errorRates = new ArrayList<>(Collections.nCopies(columnCount, 0.0)); // 默认错误率为0
     }
+
+    // 获取错误率
+    public double getErrorRate(int columnIndex) {
+        return errorRates.get(columnIndex);
+    }
+
+    // 设置某列的错误率
+    public void setErrorRate(int columnIndex, double errorRate) {
+        if (errorRate < 0 || errorRate > 1) {
+            throw new IllegalArgumentException("Error rate must be between 0 and 1");
+        }
+        errorRates.set(columnIndex, errorRate);
+    }
+
+    // 批量设置所有列的错误率
+    public void setAllErrorRates(List<Double> rates) {
+        if (rates.size() != columnCount) {
+            throw new IllegalArgumentException("Error rate list size must match column count");
+        }
+        for (int i = 0; i < rates.size(); i++) {
+            setErrorRate(i, rates.get(i));
+        }
+    }
+
 
     public void addRow(List<String> row) {
         validateRow(row);
