@@ -21,7 +21,7 @@ public class Test {
         DataSet dataset = loader.load();
 
         // 初始化 PLI 缓存
-        PLICache cache = PLICache.getInstance(dataset);
+        PLICache cache = new PLICache(dataset);
 
         // 构造目标列的 BitSet，比如第0列和第1列
         BitSet targetColumns = BitSetUtils.listToBitSet(Arrays.asList(0,2,3,6,7));

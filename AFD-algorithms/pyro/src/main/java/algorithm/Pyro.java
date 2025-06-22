@@ -4,12 +4,9 @@ import measure.*;
 import model.DataSet;
 import model.FunctionalDependency;
 import pli.PLICache;
-import sampling.RandomSampling;
-import utils.DataLoader;
+import sampling.SamplingStrategy;
 
-import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 
 /**
@@ -20,44 +17,61 @@ import java.util.List;
 
 public class Pyro {
     private final DataSet dataset;
-    private final PyroConfig config;
     private final PLICache pliCache;
-    private static final String dataPath = "data/test_new.csv";
-    private static final double maxError = 0.05;
+    private final ErrorMeasure measure;
+    private final SamplingStrategy samplingStrategy;
+    private final double maxError;
+    private long executionTimeMs;
+    private final boolean verbose;
+    private final double sampleParam;
 
-    public Pyro(DataSet dataset, PyroConfig config) {
+    public Pyro(DataSet dataset, ErrorMeasure measure, SamplingStrategy samplingStrategy, double maxError, double sampleParam, boolean verbose) {
         this.dataset = dataset;
-        this.config = config;
-        this.pliCache = PLICache.getInstance(dataset);
+        this.measure = measure;
+        this.samplingStrategy = samplingStrategy;
+        this.maxError = maxError;
+        this.sampleParam = sampleParam;
+        this.verbose = verbose;
+        this.pliCache = new PLICache(dataset);
     }
 
     public List<FunctionalDependency> discover() {
         List<FunctionalDependency> result = new ArrayList<>();
+        SearchSpace.resetValidateCount();
 
+        long startTime = System.currentTimeMillis();
+        
         // 为每个属性创建搜索空间
         for (int rhs = 0; rhs < dataset.getColumnCount(); rhs++) {
             // if (rhs != 0) continue; // 仅测试一个searchSpace，真正运行时请注释掉！
-            SearchSpace searchSpace = new SearchSpace(rhs, dataset, pliCache, config);
+            SearchSpace searchSpace = new SearchSpace(rhs, dataset, pliCache, measure, samplingStrategy, maxError, sampleParam, verbose);
             searchSpace.explore();
             result.addAll(searchSpace.getValidatedFDs());
         }
 
-        System.out.println("验证次数：" + SearchSpace.getValidateCount());
-
+        this.executionTimeMs = System.currentTimeMillis() - startTime;
         return result;
     }
 
+    public int getValidationCount() {
+        return SearchSpace.getValidateCount();
+    }
+
+    public long getExecutionTimeMs() {
+        return executionTimeMs;
+    }
+
+    /*
     public static void main(String[] args) {
         DataLoader loader = DataLoader.fromFile(
-                Path.of(dataPath)
+                Path.of("data/test_new.csv")
         ).withHeader(true).withDelimiter(',');
         DataSet dataset = loader.load();
         Pyro pyro = new Pyro(dataset,
-                new PyroConfig(
                 new G3Measure(),
                 new RandomSampling(),
-                maxError
-        ));
+                0.05
+        );
 
         List<FunctionalDependency> fdResults = pyro.discover();
 
@@ -70,4 +84,5 @@ public class Pyro {
         }
         System.out.println("总共找到 " + fdResults.size() + " 个函数依赖");
     }
-}
+    */
+} 

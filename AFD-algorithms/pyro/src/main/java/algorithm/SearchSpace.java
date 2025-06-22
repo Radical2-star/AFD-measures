@@ -1,10 +1,12 @@
 package algorithm;
 
+import measure.ErrorMeasure;
 import model.DataSet;
 import model.FunctionalDependency;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import pli.PLICache;
+import sampling.SamplingStrategy;
 import utils.BitSetUtils;
 import utils.HittingSet;
 import utils.MaxFDTrie;
@@ -23,7 +25,11 @@ import static utils.BitSetUtils.*;
 public class SearchSpace {
     private final int rhs;
     private final DataSet dataSet;
-    private final PyroConfig config;
+    private final ErrorMeasure measure;
+    private final SamplingStrategy samplingStrategy;
+    private final double maxError;
+    private final double sampleParam;
+    private final boolean verbose;
     private final PLICache cache;
     private final Node root;
 
@@ -42,13 +48,21 @@ public class SearchSpace {
         return validateCount;
     }
 
+    public static void resetValidateCount() {
+        validateCount = 0;
+    }
+
     private static int validateCount = 0;
 
-    public SearchSpace(int rhs, DataSet dataSet, PLICache cache, PyroConfig config) {
+    public SearchSpace(int rhs, DataSet dataSet, PLICache cache, ErrorMeasure measure, SamplingStrategy sampling, double maxError, double sampleParam, boolean verbose) {
         this.rhs = rhs;
         this.dataSet = dataSet;
         this.cache = cache;
-        this.config = config;
+        this.measure = measure;
+        this.samplingStrategy = sampling;
+        this.maxError = maxError;
+        this.sampleParam = sampleParam;
+        this.verbose = verbose;
 
         if (dataSet.getColumnCount() > 63) {
             logger.warn("数据集的列数 ({}) 大于63，使用Long作为键的优化不适用。", dataSet.getColumnCount());
@@ -62,11 +76,12 @@ public class SearchSpace {
         this.maxNonFD = new MaxFDTrie();
         this.peaks = new HashSet<>();
         this.root = getOrCreateNode(new BitSet(dataSet.getColumnCount()));
+        validateCount++;
     }
 
     public void explore() {
-        logger.info("开始搜索, rhs = {}", rhs);
-        logger.info("root: {}", root);
+        if (verbose) logger.info("开始搜索, rhs = {}", rhs);
+        if (verbose) logger.info("root: {}", root);
 
         // 初始化launchpads
         PriorityQueue<Node> launchpads = new PriorityQueue<>();
@@ -82,7 +97,7 @@ public class SearchSpace {
         // 遍历过程
         while (!launchpads.isEmpty()) {
             Node launchpad = launchpads.poll();
-            logger.info("launchpad: {}", launchpad);
+            if (verbose) logger.info("launchpad: {}", launchpad);
             boolean isValidPrune = checkValidPrune(launchpad.getLhs());
             boolean isInvalidPrune = checkInvalidPrune(launchpad.getLhs());
             Node peak;
@@ -92,17 +107,17 @@ public class SearchSpace {
                 if (!isValidPrune) {
                     // launchpad需要直接验，如果有效，直接添加到minValidFD和peaks
                     validate(launchpad);
-                    if (launchpad.isValid(config.getMaxError())) {
+                    if (launchpad.isValid(maxError)) {
                         peak = launchpad;
                     } else {
                         MinMaxPair<Node> minMaxPair = new MinMaxPair<>(null, launchpad);
                         // 上升，找到peak，并更新maxNonFD
                         minMaxPair = ascend(minMaxPair);
 
-                        logger.info("上升到节点: {}", minMaxPair.getLeft());
+                        if (verbose) logger.info("上升到节点: {}", minMaxPair.getLeft());
 
                         maxNonFD.add(minMaxPair.getRight().getLhs());
-                        logger.info("添加最大nonFD: {}", minMaxPair.getRight());
+                        if (verbose) logger.info("添加最大nonFD: {}", minMaxPair.getRight());
                         peak = minMaxPair.getLeft();
                     }
                 } else {
@@ -111,7 +126,7 @@ public class SearchSpace {
                 if (peak != null) {
                     peaks.add(peak.getLhs());
                     // 下降，遍历peak覆盖的所有未剪枝节点，寻找最小FD
-                    if (isValidPrune || peak.isValid(config.getMaxError())) {
+                    if (isValidPrune || peak.isValid(maxError)) {
                         trickleDown(peak);
                     }
                 }
@@ -140,13 +155,13 @@ public class SearchSpace {
             // 验证最小节点
             Node minNode = minMaxPair.getLeft();
             validate(minNode);
-            if (minNode.isValid(config.getMaxError())) {
+            if (minNode.isValid(maxError)) {
                 // 最小节点有效，标记为peak，然后继续向上找maxNonFD
                 // 这里是转折点，需要额外操作一次，节省一次计算maxNode. 逻辑和else的情况一致
                 currentPair.setLeft(minNode);
                 Node maxNode = minMaxPair.getRight();
                 validate(maxNode);
-                if (maxNode.isInvalid(config.getMaxError())) {
+                if (maxNode.isInvalid(maxError)) {
                     currentPair.setRight(maxNode);
                 } else {
                     return currentPair;
@@ -164,7 +179,7 @@ public class SearchSpace {
                 return currentPair;
             }
             validate(maxNode);
-            if (maxNode.isInvalid(config.getMaxError())) {
+            if (maxNode.isInvalid(maxError)) {
                 currentPair.setRight(maxNode);
                 return ascend(currentPair);
             } else {
@@ -205,7 +220,7 @@ public class SearchSpace {
                 if (!isValidPruned) {
                     // 如果它之前是valid的（意味着它在被标记visited时没有被poll），并且现在没有被一个更小的、新发现的FD剪枝，
                     // 那么它就是一个最小FD。
-                    logger.info("找到最小FD: {}", currentNode);
+                    if (verbose) logger.info("找到最小FD: {}", currentNode);
                     minValidFD.add(currentNode.getLhs());
                 }
                 // 父节点在它首次被标记为visited时（如果是valid）或被剪枝时已经加入队列探索，
@@ -233,7 +248,7 @@ public class SearchSpace {
                 // 当它再次成为队列头部时，会进入上面的 visited.contains() 分支进行最小性判断。
                 // 其父节点也需要被探索。
                 // 所以只需要处理节点无效的情况。
-                if (!currentNode.isValid(config.getMaxError())) {
+                if (!currentNode.isValid(maxError)) {
                     queue.poll(); // 从队列中移除。
                     // 无效节点的父节点不应通过此特定无效路径进行探索。
                     // 如果其父节点本身是有效的，它们将通过从 peak 开始的其他路径被处理。
@@ -395,14 +410,17 @@ public class SearchSpace {
 
     private void validate(Node node) {
         if (node.isValidated()) return;
-        node.setError(config.getMeasure().calculateError(node.getLhs(), rhs, dataSet, cache));
+        node.setError(measure.calculateError(node.getLhs(), rhs, dataSet, cache));
         node.setValidated();
         validateCount++;
     }
 
     private void estimate(Node node) {
         if (node.isEstimated()) return;
-        node.setError(config.getMeasure().estimateError(node.getLhs(), rhs, dataSet, cache, config.getSamplingStrategy()));
+        if (samplingStrategy != null) {
+            samplingStrategy.initialize(dataSet, cache, node.getLhs(), rhs, sampleParam);
+        }
+        node.setError(measure.estimateError(node.getLhs(), rhs, dataSet, cache, samplingStrategy));
     }
 
     public List<FunctionalDependency> getValidatedFDs() {

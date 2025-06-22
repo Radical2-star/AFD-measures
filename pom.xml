@@ -12,6 +12,7 @@
     <modules>
         <module>AFD-core</module>
         <module>AFD-algorithms</module>
+        <module>AFD-algorithms/experiment</module>
     </modules>
 
     <properties>

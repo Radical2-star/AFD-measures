@@ -1,16 +1,14 @@
 package sampling;
 
-import model.AutoTypeDataSet;
 import model.DataSet;
+import pli.PLI;
+import pli.PLICache;
 
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Random;
-import java.util.Set;
+import java.util.*;
 
 /**
- *  FocusedSampling
+ *  FocusedSampling - 聚焦采样策略
+ *  通过PLI中的等价类簇进行分层采样，忽略单例元组
  * 
  * @author Hoshi
  * @version 1.0
@@ -19,14 +17,22 @@ import java.util.Set;
 public class FocusedSampling implements SamplingStrategy {
     private Set<Integer> sampleIndices;
     private String samplingInfo;
+    private int sampleSize; // 理论样本总数
+    private final Random random;
+
+    public FocusedSampling(long seed) {
+        this.random = new Random(seed);
+    }
+
+    public FocusedSampling() {
+        this.random = new Random();
+    }
 
     @Override
-    public void initialize(DataSet data, double sampleParam) {
-        // TODO: 完善聚焦采样逻辑（当前为随机采样的复制）
+    public void initialize(DataSet data, PLICache cache, BitSet lhs, int rhs, double sampleParam) {
         int totalRows = data.getRowCount();
-        int sampleSize;
-
-        // 参数解释逻辑
+        
+        // 计算理论样本总数
         if (sampleParam < 1) {
             // 按比例采样
             sampleSize = (int) (totalRows * sampleParam);
@@ -36,18 +42,79 @@ public class FocusedSampling implements SamplingStrategy {
             sampleSize = (int) Math.min(sampleParam, totalRows);
             samplingInfo = "数量: " + sampleSize;
         }
-
-        Random rand = new Random();
-        sampleIndices = new HashSet<>();
-        while (sampleIndices.size() < sampleSize) {
-            int row = rand.nextInt(totalRows);
-            sampleIndices.add(row);
+        
+        // 如果LHS为空或样本数为0，返回空集
+        if (lhs.isEmpty() || sampleSize == 0) {
+            sampleIndices = Collections.emptySet();
+            return;
         }
+        
+        // 步骤1：查找LHS的最佳子集PLI
+        PLI subsetPli = cache.findBestCachedSubsetPli(lhs);
+        
+        // 步骤2：按簇分组采样
+        sampleIndices = sampleByCluster(subsetPli, sampleSize);
+    }
+    
+    /**
+     * 按簇比例采样
+     * @param pli PLI对象，包含等价类簇
+     * @param targetSampleSize 目标样本总数
+     * @return 采样得到的行索引集合
+     */
+    private Set<Integer> sampleByCluster(PLI pli, int targetSampleSize) {
+        Set<Integer> result = new HashSet<>();
+        List<Set<Integer>> clusters = pli.getEquivalenceClasses();
+        
+        // 如果没有非单例簇，返回空集
+        if (clusters.isEmpty()) {
+            return result;
+        }
+        
+        // 计算所有非单例元组的总数
+        int totalNonSingletons = clusters.stream()
+                .mapToInt(Set::size)
+                .sum();
+        
+        // 如果非单例元组数量小于等于目标样本数，全部采样
+        if (totalNonSingletons <= targetSampleSize) {
+            for (Set<Integer> cluster : clusters) {
+                result.addAll(cluster);
+            }
+            return result;
+        }
+        
+        // 按比例分配样本到各个簇
+        for (Set<Integer> cluster : clusters) {
+            int clusterSize = cluster.size();
+            // 计算应分配给该簇的样本数
+            int clusterSampleSize = Math.max(1, (int) Math.round((double) clusterSize / totalNonSingletons * targetSampleSize));
+            
+            // 从该簇中随机抽取样本
+            List<Integer> clusterRows = new ArrayList<>(cluster);
+            if (clusterSampleSize >= clusterSize) {
+                // 如果分配的样本数大于等于簇大小，全部采样
+                result.addAll(cluster);
+            } else {
+                // 随机采样
+                for (int i = 0; i < clusterSampleSize; i++) {
+                    int randomIndex = random.nextInt(clusterRows.size());
+                    result.add(clusterRows.remove(randomIndex));
+                }
+            }
+        }
+        
+        return result;
     }
 
     @Override
     public Set<Integer> getSampleIndices() {
         return sampleIndices;
+    }
+
+    @Override
+    public int getSampleSize() {
+        return sampleSize;
     }
 
     @Override

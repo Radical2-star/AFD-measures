@@ -13,10 +13,9 @@
     <name>AFD-algorithms</name>
     <url>http://maven.apache.org</url>
     <modules>
-        <module>algorithm-base</module>
         <module>tane</module>
         <module>pyro</module>
-        <module>dafd</module>
+        <module>experiment</module>
     </modules>
 
     <properties>

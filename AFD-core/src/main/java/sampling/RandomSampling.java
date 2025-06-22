@@ -1,11 +1,10 @@
 package sampling;
 
-import model.AutoTypeDataSet;
 import model.DataSet;
+import pli.PLICache;
 
-import java.util.ArrayList;
+import java.util.BitSet;
 import java.util.HashSet;
-import java.util.List;
 import java.util.Random;
 import java.util.Set;
 
@@ -19,13 +18,24 @@ import java.util.Set;
 public class RandomSampling implements SamplingStrategy {
     private Set<Integer> sampleIndices;
     private String samplingInfo;
-    private static final int seed = 0; // 修改随机数种子，0表示纯随机
+    private int sampleSize;
+    private final Random rand;
+
+    public RandomSampling(long seed) {
+        if (seed != 0) {
+            this.rand = new Random(seed);
+        } else {
+            this.rand = new Random();
+        }
+    }
+
+    public RandomSampling() {
+        this.rand = new Random();
+    }
 
     @Override
-    public void initialize(DataSet data, double sampleParam) {
+    public void initialize(DataSet data, PLICache cache, BitSet lhs, int rhs, double sampleParam) {
         int totalRows = data.getRowCount();
-        int sampleSize;
-        Random rand;
 
         // 参数解释逻辑
         if (sampleParam < 1) {
@@ -38,11 +48,6 @@ public class RandomSampling implements SamplingStrategy {
             samplingInfo = "数量: " + sampleSize;
         }
 
-        if (seed != 0) {
-            rand = new Random(seed);
-        } else {
-            rand = new Random();
-        }
         sampleIndices = new HashSet<>();
         while (sampleIndices.size() < sampleSize) {
             int row = rand.nextInt(totalRows);
@@ -53,6 +58,11 @@ public class RandomSampling implements SamplingStrategy {
     @Override
     public Set<Integer> getSampleIndices() {
         return sampleIndices;
+    }
+
+    @Override
+    public int getSampleSize() {
+        return sampleSize;
     }
 
     @Override

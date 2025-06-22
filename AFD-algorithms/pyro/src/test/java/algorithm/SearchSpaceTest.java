@@ -15,7 +15,6 @@ public class SearchSpaceTest {
 
     private DataSet dataSet;
     private PLICache cache;
-    private PyroConfig config;
     private SearchSpace searchSpace;
 
     @BeforeEach
@@ -32,13 +31,13 @@ public class SearchSpaceTest {
         dataSet.addRow(Arrays.asList("1", "2", "3", "4", "5", "6", "7", "8", "9", "10"));
 
         // 创建PLICache
-        cache = PLICache.getInstance(dataSet);
+        cache = new PLICache(dataSet);
 
         // 创建PyroConfig
-        config = new PyroConfig(null, null, 0.1);
+        // config = new PyroConfig(null, null, 0.1);
 
         // 创建SearchSpace
-        searchSpace = new SearchSpace(2, dataSet, cache, config);
+        // searchSpace = new SearchSpace(2, dataSet, cache, config);
     }
 
 }

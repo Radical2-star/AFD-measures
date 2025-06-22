@@ -1,5 +1,6 @@
 package algorithm;
 
+import measure.ErrorMeasure;
 import measure.G3Measure;
 import model.DataSet;
 import model.FunctionalDependency;
@@ -24,9 +25,11 @@ public class TaneAlgorithm {
     private int totalTuples;
     private PLICache cache;
     private DataSet dataSet;
-    private String infile;
+    // private String infile;
     private Double threshold;
     private int valid_count;
+    private ErrorMeasure measure;
+    private long executionTimeMs;
 
 
     public TaneAlgorithm() {
@@ -36,7 +39,7 @@ public class TaneAlgorithm {
     }
 
     public void loadData(String filename) throws IOException {
-        this.infile = filename;
+        // this.infile = filename;
         data = new ArrayList<>();
         String line;
         try (BufferedReader br = new BufferedReader(new FileReader(filename))) {
@@ -63,17 +66,22 @@ public class TaneAlgorithm {
         Arrays.fill(tableT, "NULL"); // 初始化为"NULL"字符串
     }
 
-    public Map<String, List<Integer>> listDuplicates(List<Object> seq) {
-        Map<Object, List<Integer>> tally = new HashMap<>();
+    public int getValidationCount() {
+        return valid_count;
+    }
+
+    public Map<String, List<Integer>> listDuplicates(List<String> seq) {
+        Map<String, List<Integer>> tally = new HashMap<>();
         for (int i = 0; i < seq.size(); i++) {
-            Object item = seq.get(i);
+            String item = seq.get(i);
             tally.computeIfAbsent(item, k -> new ArrayList<>()).add(i);
         }
 
         return tally.entrySet().stream()
-                .filter(entry -> entry.getValue().size() > 0) // 与Python保持一致：>0
+                .filter(entry -> entry.getKey() != null)
+                .filter(entry -> !entry.getValue().isEmpty()) // 与Python保持一致：>0
                 .collect(Collectors.toMap(
-                        entry -> entry.getKey().toString(),
+                        Map.Entry::getKey,
                         Map.Entry::getValue));
     }
 
@@ -216,20 +224,14 @@ public class TaneAlgorithm {
         List<Integer> indicesZ = getIndices(z, listOfColumns);
         Integer r=indicesZ.get(0);
 
-        double error = new G3Measure().calculateError(targetColumns, r, dataSet, cache);
-        return error;
+        return this.measure.calculateError(targetColumns, r, dataSet, cache);
     }
     public boolean validFD(String y, String z) {
         if (y.isEmpty() || z.isEmpty()) {
             return false;
         }
         double error = g3(y,z);
-        if (error<=threshold){
-            return true;
-        }
-        else{
-            return false;
-        }
+        return error <= threshold;
 
 //        // === 动态阈值 ===
 //        List<Integer> lhsIndices = getIndices(y, listOfColumns);
@@ -429,17 +431,20 @@ public class TaneAlgorithm {
         dictPartitions.put(sortedX, partitionOfX);
     }
 
-    public void computeSingletonPartitions(List<String> listOfCols) {
-        for (String a : listOfCols) {
-            dictPartitions.put(a, new ArrayList<>());
-            List<Object> column = data.stream()
-                    .map(row -> row.get(a))
-                    .collect(Collectors.toList());
+    public void computeSingletonPartitions() {
+        for (int j = 0; j < listOfColumns.size(); j++) {
+            dictPartitions.put(listOfColumns.get(j), new ArrayList<>());
+            int colIndex = j;
 
-            Map<String, List<Integer>> duplicates = listDuplicates(column);
+            List<String> columnData = new ArrayList<>(dataSet.getRowCount());
+            for (int i = 0; i < dataSet.getRowCount(); i++) {
+                columnData.add(dataSet.getValue(i, colIndex));
+            }
+
+            Map<String, List<Integer>> duplicates = listDuplicates(columnData);
             for (Map.Entry<String, List<Integer>> entry : duplicates.entrySet()) {
                 if (entry.getValue().size() > 1) { // 只保留大于1的等价类
-                    dictPartitions.get(a).add(entry.getValue());
+                    dictPartitions.get(listOfColumns.get(j)).add(entry.getValue());
                 }
             }
         }
@@ -451,22 +456,38 @@ public class TaneAlgorithm {
         return new String(chars);
     }
 
-    public void run(Double threshold) {
+    public void run(DataSet dataSet, Double threshold, ErrorMeasure measure, boolean verbose) {
         valid_count=0;
+        this.dataSet = dataSet;
         this.threshold = threshold;
-        System.out.println("开始运行TANE算法...");
-        System.out.println("数据大小: " + totalTuples + " 行, " + listOfColumns.size() + " 列");
-        System.out.println("列名: " + listOfColumns);
+        this.measure = measure;
+        this.totalTuples = dataSet.getRowCount();
+        this.cache = new PLICache(dataSet);
+        this.tableT = new String[totalTuples];
+        Arrays.fill(tableT, "NULL");
 
-        DataLoader loader = DataLoader.fromFile(
-                Path.of(infile)
-        ).withHeader(true).withDelimiter(',');
-        dataSet = loader.load();
-        cache = PLICache.getInstance(dataSet);
+        this.listOfColumns = new ArrayList<>();
+        for (int i = 0; i < dataSet.getColumnCount(); i++) {
+            this.listOfColumns.add(String.valueOf((char) ('A' + i)));
+        }
+
+        long startTime = System.currentTimeMillis();
+
+        if (verbose) {
+            System.out.println("开始运行TANE算法...");
+            System.out.println("数据大小: " + totalTuples + " 行, " + listOfColumns.size() + " 列");
+            System.out.println("列名: " + listOfColumns);
+        }
+
+        // DataLoader loader = DataLoader.fromFile(
+        //         Path.of(infile)
+        // ).withHeader(true).withDelimiter(',');
+        // dataSet = loader.load();
+        // cache = PLICache.getInstance(dataSet);
 
         List<String> L0 = new ArrayList<>();
         dictCplus.put("NULL", new ArrayList<>(listOfColumns)); // 保持与Python一致：使用"NULL"
-        computeSingletonPartitions(listOfColumns);
+        computeSingletonPartitions();
 
 
         List<String> L1 = new ArrayList<>(listOfColumns);
@@ -494,12 +515,16 @@ public class TaneAlgorithm {
             return Double.compare(error1, error2);
         });
 
-        System.out.println("找到的函数依赖:");
-        for (List<String> fd : finalListOfFDs) {
-            double error = Double.parseDouble(fd.get(2));
-            System.out.println("[" + fd.get(0) + " -> " + fd.get(1) + "] error: " + error);
+        this.executionTimeMs = System.currentTimeMillis() - startTime;
+
+        if (verbose) {
+            System.out.println("找到的函数依赖:");
+            for (List<String> fd : finalListOfFDs) {
+                double error = Double.parseDouble(fd.get(2));
+                System.out.println("[" + fd.get(0) + " -> " + fd.get(1) + "] error: " + error);
+            }
+            System.out.println("总共找到 " + finalListOfFDs.size() + " 个函数依赖");
         }
-        System.out.println("总共找到 " + finalListOfFDs.size() + " 个函数依赖");
     }
 
     /**
@@ -536,19 +561,26 @@ public class TaneAlgorithm {
         return fdSet;
     }
 
+    public long getExecutionTimeMs() {
+        return executionTimeMs;
+    }
+
     public static void main(String[] args) {
         String infile = "data/atom_new.csv";
         if (args.length > 0) {
             infile = args[0];
         }
 
+        DataLoader loader = DataLoader.fromFile(
+                Path.of(infile)
+        ).withHeader(true).withDelimiter(',');
+        DataSet dataSet = loader.load();
+
         Double threshold = 0.05;
         TaneAlgorithm tane = new TaneAlgorithm();
         try {
             //统计时间
-            long startTime = System.currentTimeMillis();
-            tane.loadData(infile);
-            tane.run(threshold);
+            tane.run(dataSet, threshold, new G3Measure(), true);
             
             // 获取FD集合并输出
             Set<FunctionalDependency> fdSet = tane.getFDSet();
@@ -565,10 +597,9 @@ public class TaneAlgorithm {
             }
             System.out.println("总共找到 " + fdSet.size() + " 个函数依赖");
             
-            long endTime = System.currentTimeMillis();
-            System.out.println("运行时间: " + (endTime - startTime) + "ms");
-            System.out.println("valid_count: "+tane.valid_count);
-        } catch (IOException e) {
+            System.out.println("运行时间: " + tane.getExecutionTimeMs() + "ms");
+            System.out.println("valid_count: "+tane.getValidationCount());
+        } catch (Exception e) {
             System.err.println("错误: " + e.getMessage());
             e.printStackTrace();
         }

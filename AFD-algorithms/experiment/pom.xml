@@ -3,14 +3,15 @@
     <modelVersion>4.0.0</modelVersion>
     <parent>
         <groupId>com.example</groupId>
-        <artifactId>AFD-algorithms</artifactId>
+        <artifactId>AFD-measures</artifactId>
         <version>1.0-SNAPSHOT</version>
+        <relativePath>../../pom.xml</relativePath>
     </parent>
 
-    <artifactId>algorithm-base</artifactId>
+    <artifactId>experiment</artifactId>
     <packaging>jar</packaging>
 
-    <name>algorithm-base</name>
+    <name>experiment</name>
     <url>http://maven.apache.org</url>
 
     <properties>
@@ -19,12 +20,10 @@
 
     <dependencies>
         <dependency>
-            <groupId>com.example</groupId>
-            <artifactId>AFD-core</artifactId>
-            <version>1.0-SNAPSHOT</version>
-            <scope>compile</scope>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
         </dependency>
-        
+
         <!-- 添加Pyro模块依赖 -->
         <dependency>
             <groupId>com.example</groupId>
@@ -32,7 +31,7 @@
             <version>1.0-SNAPSHOT</version>
             <scope>compile</scope>
         </dependency>
-        
+
         <!-- 添加TANE模块依赖 -->
         <dependency>
             <groupId>com.example</groupId>
@@ -40,18 +39,5 @@
             <version>1.0-SNAPSHOT</version>
             <scope>compile</scope>
         </dependency>
-
     </dependencies>
-    <build>
-        <plugins>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-compiler-plugin</artifactId>
-                <configuration>
-                    <source>21</source>
-                    <target>21</target>
-                </configuration>
-            </plugin>
-        </plugins>
-    </build>
 </project>

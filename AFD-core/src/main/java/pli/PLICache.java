@@ -5,7 +5,6 @@ import utils.BitSetUtils;
 import utils.Trie;
 
 import java.util.*;
-import java.util.stream.Collectors;
 
 /**
  * @author Hoshi
@@ -13,24 +12,13 @@ import java.util.stream.Collectors;
  * @since 2025/2/28
  */
 public class PLICache extends Trie<PLI> {
-    // 单例实例
-    private static PLICache instance;
     // 随机缓存概率
     public static final double CACHE_PROBABILITY = 0.5;
     private final DataSet dataset;
 
-    // 私有构造函数
-    private PLICache(DataSet dataset) {
+    public PLICache(DataSet dataset) {
         this.dataset = dataset;
         initializeSingleColumnPLIs();
-    }
-
-    // 获取单例
-    public static PLICache getInstance(DataSet dataset) {
-        if (instance == null) {
-            instance = new PLICache(dataset);
-        }
-        return instance;
     }
 
     // 初始化单列PLI
@@ -43,11 +31,6 @@ public class PLICache extends Trie<PLI> {
             List<Integer> key = Collections.singletonList(col);
             set(key, pli);
         }
-    }
-
-    // 清空缓存（重置单例）
-    public static void clear() {
-        instance = null;
     }
 
     /**
@@ -111,6 +94,49 @@ public class PLICache extends Trie<PLI> {
         }
 
         return result;
+    }
+
+    /**
+     * 高效查找LHS的最佳已缓存子集PLI
+     * 通过遍历Trie树，寻找路径上存在的尽可能深的、已被缓存的PLI，避免任何重计算
+     * 注意，这里查找到的并不一定是最深的，而是尽可能深的，是为了降低复杂度，避免多次遍历
+     * 只按顺序查找子集，例如[1,2,3]，则只查找[1],[1,2],[1,2,3]，不查找[1,3]
+     * @param lhs 左手边属性集
+     * @return 找到的最佳子集PLI
+     */
+    public PLI findBestCachedSubsetPli(BitSet lhs) {
+        List<Integer> columns = BitSetUtils.bitSetToList(lhs);
+        if (columns.isEmpty()) {
+            return null;
+        }
+
+        Node<PLI> currentNode = getRoot();
+        PLI bestPli = null;
+
+        // 沿着LHS的路径遍历Trie
+        for (int col : columns) {
+            Node<PLI> child = currentNode.getChild(col);
+            if (child == null) {
+                // 路径中断，无法继续深入
+                break;
+            }
+            if (child.getValue() != null) {
+                // 找到了一个被缓存的PLI，记录下来
+                bestPli = child.getValue();
+            }
+            currentNode = child;
+        }
+
+        // 如果遍历完整个LHS路径都没有找到任何缓存的PLI（除了根节点）
+        // 则退一步，返回单列中第一个属性的PLI（这个是保证一定存在的）
+        // 理论上这部分应该不可能被执行，因为单列PLI一定被缓存
+        if (bestPli == null) {
+            BitSet firstCol = new BitSet();
+            firstCol.set(columns.getFirst());
+            return getOrCalculatePLI(firstCol);
+        }
+
+        return bestPli;
     }
 
     private List<PLI> findAllSubsetPLIs(BitSet target) {
