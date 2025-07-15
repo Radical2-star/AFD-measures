@@ -30,7 +30,7 @@ public class ResultManager {
         OVERWRITE
     }
 
-    private static final String HEADER = "Timestamp,Dataset,ConfigName,Algorithm,FD_Count,Validation_Count,ExecutionTime_ms,Status,ErrorMessage";
+    private static final String HEADER = "Timestamp,Dataset,Columns,Rows,ConfigName,Algorithm,FD_Count,Validation_Count,ExecutionTime_ms,Status,ErrorMessage";
     private final String filePath;
     private final Set<String> existingResults = new HashSet<>();
 
@@ -71,9 +71,9 @@ public class ResultManager {
             String line;
             reader.readLine(); // Skip header
             while ((line = reader.readLine()) != null) {
-                String[] parts = line.split(",", 4); // We only need the first 3 parts for the key
-                if (parts.length >= 3) {
-                    String key = createKey(parts[1], parts[2], parts[3].split(",")[0]);
+                String[] parts = line.split(",", 6); // We only need parts for the key
+                if (parts.length >= 5) {
+                    String key = createKey(parts[1], parts[4], parts[5].split(",")[0]);
                     existingResults.add(key);
                 }
             }
@@ -99,12 +99,17 @@ public class ResultManager {
      * @param configName     The name of the configuration.
      * @param algorithmName  The name of the algorithm.
      * @param result         The ExperimentResult object.
+     * @param columns        The number of columns in the dataset.
+     * @param rows           The number of rows in the dataset.
      */
-    public void writeResult(String datasetName, String configName, String algorithmName, ExperimentResult result) {
+    public void writeResult(String datasetName, String configName, String algorithmName, 
+                            ExperimentResult result, int columns, int rows) {
         String timestamp = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date());
         String resultLine = String.join(",",
                 timestamp,
                 datasetName,
+                String.valueOf(columns),
+                String.valueOf(rows),
                 configName,
                 algorithmName,
                 String.valueOf(result.getFds().size()),
@@ -129,14 +134,19 @@ public class ResultManager {
      * @param configName     The name of the configuration.
      * @param algorithmName  The name of the algorithm.
      * @param e              The exception that occurred.
+     * @param columns        The number of columns in the dataset.
+     * @param rows           The number of rows in the dataset.
      */
-    public void writeError(String datasetName, String configName, String algorithmName, Exception e) {
+    public void writeError(String datasetName, String configName, String algorithmName, 
+                          Exception e, int columns, int rows) {
         String timestamp = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date());
         String errorMessage = e.getClass().getSimpleName() + ": " + e.getMessage().replace(",", ";"); // Avoid breaking CSV format
 
         String resultLine = String.join(",",
                 timestamp,
                 datasetName,
+                String.valueOf(columns),
+                String.valueOf(rows),
                 configName,
                 algorithmName,
                 "N/A", "N/A", "N/A", // No results
@@ -150,6 +160,20 @@ public class ResultManager {
         } catch (IOException ex) {
             System.err.println("Failed to write error to file: " + ex.getMessage());
         }
+    }
+    
+    /**
+     * Writes an error to the CSV file (原有方法的重载，兼容旧版本调用)
+     */
+    public void writeError(String datasetName, String configName, String algorithmName, Exception e) {
+        writeError(datasetName, configName, algorithmName, e, -1, -1); // 使用-1表示未知列数和行数
+    }
+
+    /**
+     * Writes a new experiment result to the CSV file (原有方法的重载，兼容旧版本调用)
+     */
+    public void writeResult(String datasetName, String configName, String algorithmName, ExperimentResult result) {
+        writeResult(datasetName, configName, algorithmName, result, -1, -1); // 使用-1表示未知列数和行数
     }
 
     private String createKey(String datasetName, String configName, String algorithmName) {

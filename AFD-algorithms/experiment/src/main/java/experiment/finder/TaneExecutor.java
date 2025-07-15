@@ -4,6 +4,10 @@ import algorithm.TaneAlgorithm;
 import experiment.ExperimentConfig;
 import experiment.ExperimentResult;
 import model.DataSet;
+import model.FunctionalDependency;
+
+import java.util.HashSet;
+import java.util.List;
 
 /**
  * @author Hoshi
@@ -13,14 +17,14 @@ import model.DataSet;
 public class TaneExecutor implements AFDFinder {
     @Override
     public ExperimentResult discover(DataSet dataset, ExperimentConfig config) {
-        TaneAlgorithm tane = new TaneAlgorithm();
+        TaneAlgorithm tane = new TaneAlgorithm(dataset, config.getMeasure(), config.getMaxError(), config.isVerbose());
+        List<FunctionalDependency> fds = tane.discover();
 
         // Note: TANE does not support sampling strategies from the config in this setup.
         // It also does not use a random seed directly.
-        tane.run(dataset, config.getMaxError(), config.getMeasure(), config.isVerbose());
 
         return new ExperimentResult(
-                tane.getFDSet(),
+                new HashSet<>(fds),
                 tane.getExecutionTimeMs(),
                 tane.getValidationCount()
         );

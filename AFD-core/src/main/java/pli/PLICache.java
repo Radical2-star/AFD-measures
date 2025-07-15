@@ -97,6 +97,24 @@ public class PLICache extends Trie<PLI> {
     }
 
     /**
+     * 辅助方法，通过BitSet获取PLI
+     * @param columns 属性集
+     * @return 对应的PLI，如果不存在则返回null
+     */
+    public PLI getPLI(BitSet columns) {
+        return get(BitSetUtils.bitSetToList(columns));
+    }
+
+    /**
+     * 辅助方法，通过BitSet检查是否存在PLI
+     * @param columns 属性集
+     * @return 是否存在
+     */
+    public boolean containsKey(BitSet columns) {
+        return get(BitSetUtils.bitSetToList(columns)) != null;
+    }
+
+    /**
      * 高效查找LHS的最佳已缓存子集PLI
      * 通过遍历Trie树，寻找路径上存在的尽可能深的、已被缓存的PLI，避免任何重计算
      * 注意，这里查找到的并不一定是最深的，而是尽可能深的，是为了降低复杂度，避免多次遍历
