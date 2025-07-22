@@ -43,7 +43,7 @@ public class PLICacheTest {
         ageCol.set(1);
         PLI agePLI = cache.getOrCalculatePLI(ageCol);
         assertEquals(1, agePLI.getClusterCount()); // 预期一个等价类{0,1,3}
-        assertTrue(agePLI.getEquivalenceClasses().getFirst().containsAll(List.of(0, 1, 3)));
+        assertTrue(agePLI.getEquivalenceClasses().get(0).containsAll(List.of(0, 1, 3)));
     }
 
     @Test
@@ -64,6 +64,6 @@ public class PLICacheTest {
 
         // 验证结果（年龄25 + 北京 → 行0,1）
         assertEquals(1, intersectPLI.getClusterCount());
-        assertTrue(intersectPLI.getEquivalenceClasses().getFirst().containsAll(List.of(0, 1)));
+        assertTrue(intersectPLI.getEquivalenceClasses().get(0).containsAll(List.of(0, 1)));
     }
 }

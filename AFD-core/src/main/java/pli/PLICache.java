@@ -82,7 +82,7 @@ public class PLICache extends Trie<PLI> {
         selectedPLIs.sort(Comparator.comparingInt(PLI::size));
 
         // 5. 逐步合并PLI
-        PLI result = selectedPLIs.getFirst();
+        PLI result = selectedPLIs.get(0);
         for (int i = 1; i < selectedPLIs.size(); i++) {
             result = result.intersect(selectedPLIs.get(i));
         }
@@ -150,7 +150,7 @@ public class PLICache extends Trie<PLI> {
         // 理论上这部分应该不可能被执行，因为单列PLI一定被缓存
         if (bestPli == null) {
             BitSet firstCol = new BitSet();
-            firstCol.set(columns.getFirst());
+            firstCol.set(columns.get(0));
             return getOrCalculatePLI(firstCol);
         }
 

@@ -5,9 +5,12 @@ import model.DataSet;
 import model.FunctionalDependency;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import pli.PLI;
 import pli.PLICache;
+import sampling.NeymanSampling;
 import sampling.SamplingStrategy;
 import utils.BitSetUtils;
+import utils.FunctionTimer;
 import utils.HittingSet;
 import utils.MaxFDTrie;
 import utils.MinFDTrie;
@@ -41,6 +44,13 @@ public class SearchSpace {
     private final MinFDTrie minValidFD;
     private final MaxFDTrie maxNonFD;
     private final Set<BitSet> peaks; // TODO: 优化为Trie
+
+    private final FunctionTimer timer = FunctionTimer.getInstance();
+
+    // Neyman采样优化：缓存单列PLI的方差信息
+    // 外层List长度为列数，RHS位置为null
+    // 内层List长度为对应单列PLI的簇数，存储每个簇的方差
+    private List<List<Double>> columnVarianceCache;
 
     private static final Logger logger = LoggerFactory.getLogger(SearchSpace.class);
 
@@ -76,7 +86,83 @@ public class SearchSpace {
         this.maxNonFD = new MaxFDTrie();
         this.peaks = new HashSet<>();
         this.root = getOrCreateNode(new BitSet(dataSet.getColumnCount()));
-        validateCount++;
+        
+        // 初始化Neyman采样缓存
+        this.columnVarianceCache = new ArrayList<>(Collections.nCopies(dataSet.getColumnCount(), null));
+        
+        // 如果使用NeymanSampling，进行预计算
+        if (samplingStrategy instanceof NeymanSampling) {
+            timer.start("一阶段预计算方差");
+            precomputeVariances();
+            // 设置缓存访问器
+            ((NeymanSampling) samplingStrategy).setVarianceCacheAccessor(this::getColumnVarianceCache);
+            timer.end("一阶段预计算方差");
+        }
+    }
+
+    /**
+     * 预计算所有单列PLI的方差信息（仅在使用NeymanSampling时调用）
+     */
+    private void precomputeVariances() {
+        if (verbose) logger.info("开始预计算单列PLI方差信息，rhs = {}", rhs);
+        
+        try {
+            // 强制转型为NeymanSampling
+            NeymanSampling neymanSampling = (NeymanSampling) samplingStrategy;
+            
+            int successCount = 0;
+            int errorCount = 0;
+            
+            for (int col = 0; col < dataSet.getColumnCount(); col++) {
+                if (col == rhs) continue; // 跳过RHS列
+                
+                try {
+                    // 获取单列PLI
+                    BitSet singleColumn = new BitSet();
+                    singleColumn.set(col);
+                    List<Integer> key = new ArrayList<>();
+                    key.add(col);
+                    PLI pli = cache.get(key);
+                    
+                    if (pli == null) {
+                        if (verbose) logger.warn("列 {} 的PLI不存在，跳过", col);
+                        continue;
+                    }
+                    
+                    // 调用NeymanSampling的预计算方法
+                    List<Double> clusterVariances = neymanSampling.precomputeColumnVariances(pli, dataSet, rhs);
+                    columnVarianceCache.set(col, clusterVariances);
+                    
+                    successCount++;
+                    if (verbose) logger.debug("列 {} 预计算完成，共 {} 个簇", col, clusterVariances.size());
+                    
+                } catch (Exception e) {
+                    errorCount++;
+                    logger.error("列 {} 预计算失败: {}", col, e.getMessage(), e);
+                    // 设置为空列表，表示该列预计算失败
+                    columnVarianceCache.set(col, new ArrayList<>());
+                }
+            }
+            
+            if (verbose) logger.info("预计算完成，成功: {}, 失败: {}", successCount, errorCount);
+            
+        } catch (Exception e) {
+            logger.error("预计算过程中发生严重错误: {}", e.getMessage(), e);
+            // 清空缓存，回退到原始方法
+            columnVarianceCache = new ArrayList<>(Collections.nCopies(dataSet.getColumnCount(), null));
+        }
+    }
+    
+    /**
+     * 获取列的缓存方差信息（供NeymanSampling调用）
+     * @param col 列索引
+     * @return 该列的方差信息，如果不存在则返回null
+     */
+    public List<Double> getColumnVarianceCache(int col) {
+        if (col < 0 || col >= columnVarianceCache.size()) {
+            return null;
+        }
+        return columnVarianceCache.get(col);
     }
 
     public void explore() {
@@ -409,10 +495,12 @@ public class SearchSpace {
     */
 
     private void validate(Node node) {
+        timer.start("validate");
         if (node.isValidated()) return;
         node.setError(measure.calculateError(node.getLhs(), rhs, dataSet, cache));
         node.setValidated();
         validateCount++;
+        timer.end("validate");
     }
 
     private void estimate(Node node) {

@@ -107,7 +107,7 @@ public class TaneAlgorithm {
      * @param x 属性集
      */
     private void computeCPlus(BitSet x) {
-        // 更新：此方法目前未被直接调用，但保留其基础实现以备将来可能的扩展
+        // 此方法目前未被直接调用，但保留其基础实现以备将来可能的扩展
         if (cPlusMap.containsKey(x)) return;
 
         List<BitSet> subsets = new ArrayList<>();

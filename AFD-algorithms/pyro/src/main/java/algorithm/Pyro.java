@@ -4,9 +4,15 @@ import measure.*;
 import model.DataSet;
 import model.FunctionalDependency;
 import pli.PLICache;
+import sampling.NeymanSampling;
+import sampling.RandomSampling;
 import sampling.SamplingStrategy;
+import utils.DataLoader;
+import utils.FunctionTimer;
 
+import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 
 /**
@@ -61,16 +67,17 @@ public class Pyro {
         return executionTimeMs;
     }
 
-    /*
     public static void main(String[] args) {
         DataLoader loader = DataLoader.fromFile(
-                Path.of("data/test_new.csv")
-        ).withHeader(true).withDelimiter(',');
+                Path.of("data/0/classification.csv")
+        ).withHeader(true).withDelimiter(';');
         DataSet dataset = loader.load();
         Pyro pyro = new Pyro(dataset,
                 new G3Measure(),
-                new RandomSampling(),
-                0.05
+                new NeymanSampling(),
+                0.05,
+                200,
+                false
         );
 
         List<FunctionalDependency> fdResults = pyro.discover();
@@ -83,6 +90,8 @@ public class Pyro {
             System.out.println(sortedFDs.get(i));
         }
         System.out.println("总共找到 " + fdResults.size() + " 个函数依赖");
+
+        FunctionTimer timer = FunctionTimer.getInstance();
+        timer.printResults();
     }
-    */
 } 

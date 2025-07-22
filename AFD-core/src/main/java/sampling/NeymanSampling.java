@@ -6,6 +6,7 @@ import pli.PLICache;
 
 import java.util.*;
 import java.util.stream.Collectors;
+import java.util.function.Function;
 
 /**
  * NeymanSampling - 基于Neyman最优分配的聚焦采样策略
@@ -20,6 +21,9 @@ public class NeymanSampling implements SamplingStrategy {
     private String samplingInfo;
     private int sampleSize; // 理论样本总数
     private final Random random;
+
+    // 缓存相关：用于存储预计算的方差信息
+    private Function<Integer, List<Double>> varianceCacheAccessor;
     
     public NeymanSampling(long seed) {
         this.random = new Random(seed);
@@ -28,9 +32,99 @@ public class NeymanSampling implements SamplingStrategy {
     public NeymanSampling() {
         this.random = new Random();
     }
+    
+    /**
+     * 设置方差缓存访问器（由SearchSpace调用）
+     * @param accessor 缓存访问函数
+     */
+    public void setVarianceCacheAccessor(Function<Integer, List<Double>> accessor) {
+        this.varianceCacheAccessor = accessor;
+    }
 
     // 试点采样的最大样本数
     private static final int MAX_PILOT_SAMPLE_SIZE = 20;
+    
+    /**
+     * 预计算单列PLI的方差信息（供SearchSpace调用）
+     * @param pli 单列PLI
+     * @param data 数据集
+     * @param rhs 右手边属性索引
+     * @return 每个簇的方差列表，按PLI中等价类的顺序
+     */
+    public List<Double> precomputeColumnVariances(PLI pli, DataSet data, int rhs) {
+        List<Set<Integer>> clusters = pli.getEquivalenceClasses();
+        List<Double> variances = new ArrayList<>();
+        
+        if (clusters.isEmpty()) {
+            return variances;
+        }
+        
+        for (Set<Integer> cluster : clusters) {
+            // 执行试点采样
+            Set<Integer> pilotSample = performPilotSampling(cluster);
+            
+            // 计算方差
+            double variance = calculateClusterVariance(pilotSample, data, rhs);
+            variances.add(variance);
+        }
+        
+        return variances;
+    }
+    
+    /**
+     * 执行试点采样（内部方法）
+     */
+    private Set<Integer> performPilotSampling(Set<Integer> cluster) {
+        Set<Integer> pilotSample = new HashSet<>();
+        
+        // 计算试点样本数量：min(sqrt(簇大小), MAX_PILOT_SAMPLE_SIZE)
+        int pilotSize = Math.min(MAX_PILOT_SAMPLE_SIZE, (int) Math.sqrt(cluster.size()));
+        
+        // 如果试点样本数量大于等于簇大小，全部采样
+        if (pilotSize >= cluster.size()) {
+            pilotSample.addAll(cluster);
+        } else {
+            // 随机采样
+            List<Integer> clusterRows = new ArrayList<>(cluster);
+            for (int i = 0; i < pilotSize; i++) {
+                int randomIndex = random.nextInt(clusterRows.size());
+                pilotSample.add(clusterRows.remove(randomIndex));
+            }
+        }
+        
+        return pilotSample;
+    }
+    
+    /**
+     * 计算簇内方差（内部方法）
+     */
+    private double calculateClusterVariance(Set<Integer> pilotSample, DataSet data, int rhs) {
+        if (pilotSample.size() <= 1) {
+            return 0.0;
+        }
+        
+        // 1. 找到试点样本中的主流RHS值
+        String majorityValue = pilotSample.stream()
+                .map(row -> data.getValue(row, rhs))
+                .collect(Collectors.groupingBy(val -> val, Collectors.counting()))
+                .entrySet().stream()
+                .max(Map.Entry.comparingByValue())
+                .map(Map.Entry::getKey)
+                .orElse("");
+
+        // 2. 计算冲突指示变量 (1表示冲突, 0表示不冲突)
+        List<Integer> indicators = new ArrayList<>();
+        for (int row : pilotSample) {
+            indicators.add(data.getValue(row, rhs).equals(majorityValue) ? 0 : 1);
+        }
+
+        // 3. 计算这些指示变量的样本方差 s^2 = (1/(n-1)) * sum((x_i - mean)^2)
+        double mean = indicators.stream().mapToInt(Integer::intValue).average().orElse(0.0);
+
+        return indicators.stream()
+                .mapToDouble(i -> (i - mean) * (i - mean))
+                .sum() / (indicators.size() - 1);
+    }
 
     @Override
     public void initialize(DataSet data, PLICache cache, BitSet lhs, int rhs, double sampleParam) {
@@ -53,11 +147,154 @@ public class NeymanSampling implements SamplingStrategy {
             return;
         }
         
-        // 步骤1：查找LHS的最佳子集PLI
-        PLI subsetPli = cache.findBestCachedSubsetPli(lhs);
+        // 优化：选择LHS中size最小的单列PLI进行采样
+        PLI selectedPli = selectMinimalSizePli(lhs, cache, rhs);
         
-        // 步骤2：执行两阶段采样
-        sampleIndices = twoPhaseNeymanSampling(subsetPli, data, rhs, sampleSize);
+        // 执行优化后的两阶段采样
+        sampleIndices = optimizedTwoPhaseNeymanSampling(selectedPli, data, rhs, sampleSize);
+    }
+    
+    /**
+     * 选择LHS中size最小的单列PLI
+     * @param lhs 左手边属性集合
+     * @param cache PLI缓存
+     * @param rhs 右手边属性索引
+     * @return size最小的单列PLI
+     */
+    private PLI selectMinimalSizePli(BitSet lhs, PLICache cache, int rhs) {
+        PLI minPli = null;
+        int minSize = Integer.MAX_VALUE;
+        
+        try {
+            for (int col = lhs.nextSetBit(0); col >= 0; col = lhs.nextSetBit(col + 1)) {
+                if (col == rhs) continue; // 跳过RHS列
+                
+                try {
+                    // 获取单列PLI
+                    BitSet singleColumn = new BitSet();
+                    singleColumn.set(col);
+                    List<Integer> key = new ArrayList<>();
+                    key.add(col);
+                    PLI pli = cache.get(key);
+                    
+                    if (pli != null && pli.size() < minSize) {
+                        minSize = pli.size();
+                        minPli = pli;
+                    }
+                } catch (Exception e) {
+                    // 单列PLI获取失败，跳过这一列
+                    continue;
+                }
+            }
+        } catch (Exception e) {
+            // 整个过程失败，回退到原始方法
+            return cache.findBestCachedSubsetPli(lhs);
+        }
+        
+        // 如果没有找到合适的单列PLI，回退到原始方法
+        if (minPli == null) {
+            return cache.findBestCachedSubsetPli(lhs);
+        }
+        
+        return minPli;
+    }
+    
+    /**
+     * 优化后的两阶段Neyman采样（尝试使用缓存的方差信息）
+     * @param pli 选择的PLI对象
+     * @param data 数据集对象
+     * @param rhs 右手边属性索引
+     * @param targetSampleSize 目标样本总数
+     * @return 采样得到的行索引集合
+     */
+    private Set<Integer> optimizedTwoPhaseNeymanSampling(PLI pli, DataSet data, int rhs, int targetSampleSize) {
+        List<Set<Integer>> clusters = pli.getEquivalenceClasses();
+        Set<Integer> result = new HashSet<>();
+        
+        // 如果没有非单例簇，返回空集
+        if (clusters.isEmpty()) {
+            return result;
+        }
+        
+        // 计算所有非单例元组的总数
+        int totalNonSingletons = clusters.stream()
+                .mapToInt(Set::size)
+                .sum();
+        
+        // 如果非单例元组数量小于等于目标样本数，全部采样
+        if (totalNonSingletons <= targetSampleSize) {
+            for (Set<Integer> cluster : clusters) {
+                result.addAll(cluster);
+            }
+            return result;
+        }
+        
+        // 尝试使用缓存的方差信息，如果没有则回退到原始方法
+        Map<Integer, Double> clusterVariances = getCachedVariances(pli, data, rhs);
+        if (clusterVariances == null) {
+            // 回退到原始的两阶段采样
+            return twoPhaseNeymanSampling(pli, data, rhs, targetSampleSize);
+        }
+        
+        // 使用缓存的方差信息进行Neyman最优分配
+        Map<Integer, Integer> allocations = calculateAllocation(
+                clusters, clusterVariances, targetSampleSize);
+        
+        // 执行主采样
+        for (int i = 0; i < clusters.size(); i++) {
+            Set<Integer> cluster = clusters.get(i);
+            int allocation = allocations.get(i);
+            
+            // 如果分配数量大于等于簇大小，全部采样
+            if (allocation >= cluster.size()) {
+                result.addAll(cluster);
+                continue;
+            }
+            
+            // 随机采样
+            List<Integer> clusterRows = new ArrayList<>(cluster);
+            for (int j = 0; j < allocation; j++) {
+                int randomIndex = random.nextInt(clusterRows.size());
+                result.add(clusterRows.remove(randomIndex));
+            }
+        }
+        
+        return result;
+    }
+    
+    /**
+     * 尝试获取缓存的方差信息
+     * @param pli PLI对象
+     * @param data 数据集
+     * @param rhs 右手边属性索引
+     * @return 缓存的方差信息，如果没有则返回null
+     */
+    private Map<Integer, Double> getCachedVariances(PLI pli, DataSet data, int rhs) {
+        // 如果没有缓存访问器，返回null
+        if (varianceCacheAccessor == null) {
+            return null;
+        }
+        
+        // 获取PLI对应的列索引
+        BitSet columns = pli.getColumns();
+        if (columns.cardinality() != 1) {
+            return null; // 只支持单列PLI
+        }
+        
+        int columnIndex = columns.nextSetBit(0);
+        List<Double> cachedVariances = varianceCacheAccessor.apply(columnIndex);
+        
+        if (cachedVariances == null || cachedVariances.isEmpty()) {
+            return null;
+        }
+        
+        // 将List转换为Map（索引作为键）
+        Map<Integer, Double> result = new HashMap<>();
+        for (int i = 0; i < cachedVariances.size(); i++) {
+            result.put(i, cachedVariances.get(i));
+        }
+        
+        return result;
     }
     
     /**
