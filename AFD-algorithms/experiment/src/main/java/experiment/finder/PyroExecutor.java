@@ -47,10 +47,18 @@ public class PyroExecutor implements AFDFinder {
 
         List<FunctionalDependency> fds = pyro.discover();
 
-        return new ExperimentResult(
+        // 创建增强的实验结果，包含内存和PLI统计信息
+        ExperimentResult result = new ExperimentResult(
                 new HashSet<>(fds),
                 pyro.getExecutionTimeMs(),
                 pyro.getValidationCount()
         );
+
+        // 添加内存和性能统计信息
+        result.setPeakMemoryUsageMB(pyro.getPeakMemoryUsageMB());
+        result.setPliPerformanceStats(pyro.getPLIPerformanceStats());
+        result.setMemoryStats(pyro.getMemoryStats());
+
+        return result;
     }
 }

@@ -23,10 +23,18 @@ public class TaneExecutor implements AFDFinder {
         // Note: TANE does not support sampling strategies from the config in this setup.
         // It also does not use a random seed directly.
 
-        return new ExperimentResult(
+        // 创建增强的实验结果，包含内存和PLI统计信息
+        ExperimentResult result = new ExperimentResult(
                 new HashSet<>(fds),
                 tane.getExecutionTimeMs(),
                 tane.getValidationCount()
         );
+
+        // 添加内存和性能统计信息
+        result.setPeakMemoryUsageMB(tane.getPeakMemoryUsageMB());
+        result.setPliPerformanceStats(tane.getPLIPerformanceStats());
+        result.setMemoryStats(tane.getMemoryStats());
+
+        return result;
     }
 }

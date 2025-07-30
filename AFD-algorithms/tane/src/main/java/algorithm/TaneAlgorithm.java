@@ -4,7 +4,11 @@ import measure.ErrorMeasure;
 import model.DataSet;
 import model.FunctionalDependency;
 import pli.PLICache;
+import pli.PLIOptimizationIntegrator;
 import utils.BitSetUtils;
+import utils.MemoryMonitor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.*;
 
@@ -16,8 +20,11 @@ import java.util.*;
  * @since 2025/7/15
  */
 public class TaneAlgorithm {
+    private static final Logger logger = LoggerFactory.getLogger(TaneAlgorithm.class);
+
     private final DataSet dataSet;
     private final PLICache pliCache;
+    private final PLIOptimizationIntegrator pliIntegrator;
     private final ErrorMeasure measure;
     private final double maxError;
     private final boolean verbose;
@@ -25,6 +32,11 @@ public class TaneAlgorithm {
     private final Map<BitSet, BitSet> cPlusMap;
     private int validationCount;
     private long executionTimeMs;
+
+    // 性能统计
+    private long peakMemoryUsage = 0;
+    private String pliPerformanceStats = "";
+    private String memoryStats = "";
 
     /**
      * 构造函数
@@ -39,10 +51,30 @@ public class TaneAlgorithm {
         this.measure = measure;
         this.maxError = maxError;
         this.verbose = verbose;
-        this.pliCache = new PLICache(dataSet);
+
+        // 初始化PLI优化集成器
+        this.pliIntegrator = new PLIOptimizationIntegrator(dataSet);
+        this.pliCache = pliIntegrator.createCompatibleCache();
+
         this.result = new ArrayList<>();
         this.cPlusMap = new HashMap<>();
         this.validationCount = 0;
+
+        // 启动内存监控
+        if (verbose) {
+            MemoryMonitor.getInstance().startMonitoring(5000, alert -> {
+                if (alert.getLevel() == MemoryMonitor.AlertLevel.CRITICAL) {
+                    logger.warn("TANE算法执行中检测到严重内存压力: {}", alert);
+                } else if (alert.getLevel() == MemoryMonitor.AlertLevel.WARNING) {
+                    logger.info("TANE算法执行中检测到内存压力: {}", alert);
+                }
+            });
+        }
+
+        if (verbose) {
+            logger.info("TANE算法初始化完成，数据集: {}行×{}列",
+                       dataSet.getRowCount(), dataSet.getColumnCount());
+        }
     }
 
     /**
@@ -56,49 +88,90 @@ public class TaneAlgorithm {
         validationCount = 0;
         cPlusMap.clear();
 
-        // 初始化空集的C+为所有属性
-        BitSet emptySet = new BitSet();
-        BitSet allAttributes = new BitSet();
-        allAttributes.set(0, dataSet.getColumnCount());
-        cPlusMap.put(emptySet, allAttributes);
+        MemoryMonitor memoryMonitor = MemoryMonitor.getInstance();
 
-        // 初始化第一层（单个属性）
-        List<BitSet> level1 = new ArrayList<>();
-        for (int i = 0; i < dataSet.getColumnCount(); i++) {
-            BitSet singleton = new BitSet();
-            singleton.set(i);
-            level1.add(singleton);
-            cPlusMap.put(singleton, (BitSet) allAttributes.clone());
+        // 记录初始内存状态
+        MemoryMonitor.MemorySnapshot initialMemory = memoryMonitor.getCurrentMemorySnapshot();
+        if (verbose) {
+            logger.info("TANE算法开始执行，初始内存使用: {}MB",
+                       initialMemory.getUsedHeapMemory() / (1024 * 1024));
         }
 
-        // 逐层遍历
-        List<BitSet> currentLevel = level1;
-        int levelNum = 1;
+        try {
+            // 初始化空集的C+为所有属性
+            BitSet emptySet = new BitSet();
+            BitSet allAttributes = new BitSet();
+            allAttributes.set(0, dataSet.getColumnCount());
+            cPlusMap.put(emptySet, allAttributes);
 
-        while (!currentLevel.isEmpty()) {
+            // 初始化第一层（单个属性）
+            List<BitSet> level1 = new ArrayList<>();
+            for (int i = 0; i < dataSet.getColumnCount(); i++) {
+                BitSet singleton = new BitSet();
+                singleton.set(i);
+                level1.add(singleton);
+                cPlusMap.put(singleton, (BitSet) allAttributes.clone());
+            }
+
+            // 逐层遍历
+            List<BitSet> currentLevel = level1;
+            int levelNum = 1;
+
+            while (!currentLevel.isEmpty()) {
+                if (verbose) {
+                    logger.info("处理第 {} 层，候选集大小: {}", levelNum, currentLevel.size());
+                }
+
+                computeDependencies(currentLevel);
+                // prune(currentLevel);
+
+                if (currentLevel.isEmpty()) {
+                    break;
+                }
+
+                List<BitSet> nextLevel = generateNextLevel(currentLevel);
+
+                for (BitSet x : nextLevel) {
+                    computeCPlus(x);
+                }
+
+                currentLevel = nextLevel;
+                levelNum++;
+
+                // 定期检查内存使用
+                MemoryMonitor.MemorySnapshot currentMemory = memoryMonitor.getCurrentMemorySnapshot();
+                long currentMemoryMB = currentMemory.getUsedHeapMemory() / (1024 * 1024);
+                if (currentMemoryMB > peakMemoryUsage) {
+                    peakMemoryUsage = currentMemoryMB;
+                }
+
+                if (verbose && levelNum % 3 == 0) {
+                    logger.info("已处理 {} 层，当前内存: {}MB，峰值: {}MB",
+                               levelNum - 1, currentMemoryMB, peakMemoryUsage);
+                }
+            }
+
+            this.executionTimeMs = System.currentTimeMillis() - startTime;
+
+            // 收集性能统计
+            this.pliPerformanceStats = pliIntegrator.getPerformanceStats();
+            this.memoryStats = pliIntegrator.getDetailedMemoryStats();
+
             if (verbose) {
-                System.out.println("处理第 " + levelNum + " 层，候选集大小: " + currentLevel.size());
+                logger.info("TANE算法执行完成，耗时: {}ms，发现FD数量: {}",
+                           executionTimeMs, result.size());
+                logger.info("PLI性能统计: {}", pliPerformanceStats);
+                logger.info("内存峰值: {}MB", peakMemoryUsage);
             }
 
-            computeDependencies(currentLevel);
-            // prune(currentLevel); 
-            
-            if (currentLevel.isEmpty()) {
-                break;
+            return result;
+
+        } finally {
+            // 清理资源
+            if (pliIntegrator != null) {
+                pliIntegrator.shutdown();
             }
-            
-            List<BitSet> nextLevel = generateNextLevel(currentLevel);
-            
-            for (BitSet x : nextLevel) {
-                computeCPlus(x);
-            }
-            
-            currentLevel = nextLevel;
-            levelNum++;
         }
-
-        this.executionTimeMs = System.currentTimeMillis() - startTime;
-        return result;
     }
 
     /**
@@ -369,10 +442,31 @@ public class TaneAlgorithm {
 
     /**
      * 获取执行时间（毫秒）
-     * 
+     *
      * @return 执行时间
      */
     public long getExecutionTimeMs() {
         return executionTimeMs;
+    }
+
+    /**
+     * 获取内存峰值使用量（MB）
+     */
+    public long getPeakMemoryUsageMB() {
+        return peakMemoryUsage;
+    }
+
+    /**
+     * 获取PLI性能统计信息
+     */
+    public String getPLIPerformanceStats() {
+        return pliPerformanceStats;
+    }
+
+    /**
+     * 获取详细内存统计信息
+     */
+    public String getMemoryStats() {
+        return memoryStats;
     }
 }

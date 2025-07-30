@@ -30,7 +30,7 @@ public class ResultManager {
         OVERWRITE
     }
 
-    private static final String HEADER = "Timestamp,Dataset,Columns,Rows,ConfigName,Algorithm,FD_Count,Validation_Count,ExecutionTime_ms,Status,ErrorMessage";
+    private static final String HEADER = "Timestamp,Dataset,Columns,Rows,ConfigName,Algorithm,FD_Count,Validation_Count,ExecutionTime_ms,PeakMemory_MB,PLI_Stats,Status,ErrorMessage";
     private final String filePath;
     private final Set<String> existingResults = new HashSet<>();
 
@@ -102,9 +102,16 @@ public class ResultManager {
      * @param columns        The number of columns in the dataset.
      * @param rows           The number of rows in the dataset.
      */
-    public void writeResult(String datasetName, String configName, String algorithmName, 
+    public void writeResult(String datasetName, String configName, String algorithmName,
                             ExperimentResult result, int columns, int rows) {
         String timestamp = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date());
+
+        // 处理PLI统计信息，移除逗号以避免CSV格式问题
+        String pliStats = result.getPliPerformanceStats().replaceAll(",", ";");
+        if (pliStats.isEmpty()) {
+            pliStats = "N/A";
+        }
+
         String resultLine = String.join(",",
                 timestamp,
                 datasetName,
@@ -115,6 +122,8 @@ public class ResultManager {
                 String.valueOf(result.getFds().size()),
                 String.valueOf(result.getValidationCount()),
                 String.valueOf(result.getExecutionTimeMs()),
+                String.valueOf(result.getPeakMemoryUsageMB()),
+                "\"" + pliStats + "\"", // 用引号包围以处理特殊字符
                 "SUCCESS",
                 "" // No error message
         );
@@ -149,7 +158,7 @@ public class ResultManager {
                 String.valueOf(rows),
                 configName,
                 algorithmName,
-                "N/A", "N/A", "N/A", // No results
+                "N/A", "N/A", "N/A", "N/A", "N/A", // No results (包括新增的内存和PLI统计字段)
                 "FAILURE",
                 errorMessage
         );

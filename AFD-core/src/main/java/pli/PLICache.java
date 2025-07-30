@@ -1,6 +1,8 @@
 package pli;
 
 import model.DataSet;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import utils.BitSetUtils;
 import utils.Trie;
 
@@ -12,12 +14,28 @@ import java.util.*;
  * @since 2025/2/28
  */
 public class PLICache extends Trie<PLI> {
+    private static final Logger logger = LoggerFactory.getLogger(PLICache.class);
+    
     // 随机缓存概率
     public static final double CACHE_PROBABILITY = 0.5;
+    
+    // LRU缓存配置 - 可通过系统属性调整测试阈值
+    private static final int MAX_CACHE_SIZE = Integer.getInteger("pli.cache.max", 10000);
+    private static final int CLEANUP_BATCH_SIZE = Integer.getInteger("pli.cache.cleanup.batch", 1000);
+    private static final int CLEANUP_THRESHOLD = Integer.getInteger("pli.cache.cleanup.threshold", 8000);
+    
     private final DataSet dataset;
+    
+    // LRU管理：跟踪缓存项的访问顺序和统计信息
+    private final LinkedHashMap<List<Integer>, Long> accessOrder;  // key -> 最后访问时间
+    private int currentCacheSize = 0;  // 当前缓存的PLI数量
+    private long accessCounter = 0;    // 访问计数器，用于统计
+    private long hitCount = 0;         // 缓存命中计数
+    private long missCount = 0;        // 缓存未命中计数
 
     public PLICache(DataSet dataset) {
         this.dataset = dataset;
+        this.accessOrder = new LinkedHashMap<>(16, 0.75f, true); // 启用访问顺序
         initializeSingleColumnPLIs();
     }
 
@@ -29,8 +47,114 @@ public class PLICache extends Trie<PLI> {
             columns.set(col);
             PLI pli = new PLI(columns, dataset);
             List<Integer> key = Collections.singletonList(col);
-            set(key, pli);
+            setWithLRU(key, pli);
         }
+    }
+    
+    /**
+     * 重写get方法，添加LRU访问跟踪
+     */
+    @Override
+    public PLI get(List<Integer> key) {
+        accessCounter++;
+        PLI result = super.get(key);
+        
+        if (result != null) {
+            hitCount++;
+            // 更新访问时间
+            updateAccessTime(key);
+        } else {
+            missCount++;
+        }
+        
+        return result;
+    }
+    
+    /**
+     * 带LRU管理的set方法
+     */
+    private void setWithLRU(List<Integer> key, PLI value) {
+        // 检查是否是更新现有项
+        boolean isUpdate = super.get(key) != null;
+        
+        // 设置值
+        super.set(key, value);
+        updateAccessTime(key);
+        
+        // 如果是新项，增加计数
+        if (!isUpdate) {
+            currentCacheSize++;
+            
+            // 检查是否需要清理
+            if (currentCacheSize > CLEANUP_THRESHOLD) {
+                performLRUCleanup();
+            }
+        }
+    }
+    
+    /**
+     * 重写set方法，使用LRU管理
+     */
+    @Override
+    public void set(List<Integer> key, PLI value) {
+        setWithLRU(key, value);
+    }
+    
+    /**
+     * 更新访问时间
+     */
+    private void updateAccessTime(List<Integer> key) {
+        accessOrder.put(new ArrayList<>(key), System.currentTimeMillis());
+    }
+    
+    /**
+     * 执行LRU清理
+     */
+    private void performLRUCleanup() {
+        if (currentCacheSize <= CLEANUP_THRESHOLD) return;
+        
+        logger.info("开始PLI缓存清理，当前缓存数量: {}", currentCacheSize);
+        
+        Iterator<Map.Entry<List<Integer>, Long>> iterator = accessOrder.entrySet().iterator();
+        int cleaned = 0;
+        
+        while (iterator.hasNext() && cleaned < CLEANUP_BATCH_SIZE && currentCacheSize > MAX_CACHE_SIZE - CLEANUP_BATCH_SIZE) {
+            Map.Entry<List<Integer>, Long> entry = iterator.next();
+            List<Integer> key = entry.getKey();
+            
+            // 不清理单列PLI，它们是基础缓存
+            if (key.size() == 1) {
+                continue;
+            }
+            
+            // 从Trie中删除
+            deletePLI(key);
+            iterator.remove();
+            cleaned++;
+            currentCacheSize--;
+        }
+        
+        logger.info("PLI缓存清理完成，清理数量: {}, 当前缓存数量: {}", cleaned, currentCacheSize);
+    }
+    
+    /**
+     * 安全删除PLI项
+     */
+    private void deletePLI(List<Integer> key) {
+        try {
+            super.delete(key);
+        } catch (Exception e) {
+            logger.warn("删除PLI缓存项失败: {}, 错误: {}", key, e.getMessage());
+        }
+    }
+    
+    /**
+     * 获取缓存统计信息
+     */
+    public String getCacheStats() {
+        double hitRate = accessCounter > 0 ? (double) hitCount / accessCounter * 100 : 0;
+        return String.format("PLI缓存统计 - 大小: %d, 访问: %d, 命中率: %.2f%%, 命中: %d, 未命中: %d", 
+                           currentCacheSize, accessCounter, hitRate, hitCount, missCount);
     }
 
     /**
@@ -90,7 +214,7 @@ public class PLICache extends Trie<PLI> {
         // 6. 概率性缓存（使用合并后的最终列）
         if (Math.random() < CACHE_PROBABILITY) {
             List<Integer> finalKey = BitSetUtils.bitSetToList(targetColumns);
-            set(finalKey, result);
+            setWithLRU(finalKey, result);
         }
 
         return result;

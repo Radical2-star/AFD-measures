@@ -13,6 +13,11 @@ public class ExperimentResult {
     private final long executionTimeMs;
     private final long validationCount;
 
+    // 新增的性能和内存统计字段
+    private long peakMemoryUsageMB = 0;
+    private String pliPerformanceStats = "";
+    private String memoryStats = "";
+
     public ExperimentResult(Set<FunctionalDependency> fds, long executionTimeMs, long validationCount) {
         this.fds = fds;
         this.executionTimeMs = executionTimeMs;
@@ -29,5 +34,30 @@ public class ExperimentResult {
 
     public long getValidationCount() {
         return validationCount;
+    }
+
+    // 新增的getter和setter方法
+    public long getPeakMemoryUsageMB() {
+        return peakMemoryUsageMB;
+    }
+
+    public void setPeakMemoryUsageMB(long peakMemoryUsageMB) {
+        this.peakMemoryUsageMB = peakMemoryUsageMB;
+    }
+
+    public String getPliPerformanceStats() {
+        return pliPerformanceStats;
+    }
+
+    public void setPliPerformanceStats(String pliPerformanceStats) {
+        this.pliPerformanceStats = pliPerformanceStats;
+    }
+
+    public String getMemoryStats() {
+        return memoryStats;
+    }
+
+    public void setMemoryStats(String memoryStats) {
+        this.memoryStats = memoryStats;
     }
 }

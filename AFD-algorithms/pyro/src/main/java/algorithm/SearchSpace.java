@@ -10,12 +10,14 @@ import pli.PLICache;
 import sampling.NeymanSampling;
 import sampling.SamplingStrategy;
 import utils.BitSetUtils;
+import utils.LongBitSetUtils;
 import utils.FunctionTimer;
 import utils.HittingSet;
 import utils.MaxFDTrie;
 import utils.MinFDTrie;
 import utils.MinMaxPair;
 
+import java.lang.ref.SoftReference;
 import java.util.*;
 
 import static utils.BitSetUtils.*;
@@ -36,14 +38,19 @@ public class SearchSpace {
     private final PLICache cache;
     private final Node root;
 
-    // 存储节点的辅助结构
-    private final Map<Long, Integer> lhsToIdMap;
-    private final List<Node> nodeList;
-    private int nextNodeId;
+    // 智能节点内存管理
+    private final Map<Long, Node> activeNodes;           // 强引用保持活跃节点
+    private final Map<Long, SoftReference<Node>> cachedNodes;  // 软引用管理可能重用的节点
+    private final LinkedHashMap<Long, Long> accessOrder;      // LRU维护最近访问顺序
+    
+    // 内存管理配置
+    private static final int MAX_ACTIVE_NODES = 10000;     // 活跃节点上限
+    private static final int CLEANUP_BATCH_SIZE = 1000;    // 批量清理大小
+    private static final int CLEANUP_THRESHOLD = 8000;     // 开始清理的阈值
 
     private final MinFDTrie minValidFD;
     private final MaxFDTrie maxNonFD;
-    private final Set<BitSet> peaks; // TODO: 优化为Trie
+    private final Set<Long> peaks; // 优化为long类型
 
     private final FunctionTimer timer = FunctionTimer.getInstance();
 
@@ -78,14 +85,15 @@ public class SearchSpace {
             logger.warn("数据集的列数 ({}) 大于63，使用Long作为键的优化不适用。", dataSet.getColumnCount());
         }
 
-        this.lhsToIdMap = new HashMap<>();
-        this.nodeList = new ArrayList<>();
-        this.nextNodeId = 0;
-
+        // 初始化智能节点管理
+        this.activeNodes = new HashMap<>();
+        this.cachedNodes = new HashMap<>(); 
+        this.accessOrder = new LinkedHashMap<>(16, 0.75f, true); // LRU访问顺序
+        
         this.minValidFD = new MinFDTrie();
         this.maxNonFD = new MaxFDTrie();
         this.peaks = new HashSet<>();
-        this.root = getOrCreateNode(new BitSet(dataSet.getColumnCount()));
+        this.root = getOrCreateNode(0L); // 空集用0L表示
         
         // 初始化Neyman采样缓存
         this.columnVarianceCache = new ArrayList<>(Collections.nCopies(dataSet.getColumnCount(), null));
@@ -107,7 +115,6 @@ public class SearchSpace {
         if (verbose) logger.info("开始预计算单列PLI方差信息，rhs = {}", rhs);
         
         try {
-            // 强制转型为NeymanSampling
             NeymanSampling neymanSampling = (NeymanSampling) samplingStrategy;
             
             int successCount = 0;
@@ -118,8 +125,6 @@ public class SearchSpace {
                 
                 try {
                     // 获取单列PLI
-                    BitSet singleColumn = new BitSet();
-                    singleColumn.set(col);
                     List<Integer> key = new ArrayList<>();
                     key.add(col);
                     PLI pli = cache.get(key);
@@ -173,8 +178,7 @@ public class SearchSpace {
         PriorityQueue<Node> launchpads = new PriorityQueue<>();
         for (int i = 0; i < dataSet.getColumnCount(); i++) {
             if (i == rhs) continue;
-            BitSet newLhs = new BitSet(dataSet.getColumnCount());
-            newLhs.set(i);
+            long newLhs = 1L << i;
             Node child = getOrCreateNode(newLhs);
             estimate(child);
             launchpads.add(child);
@@ -202,7 +206,7 @@ public class SearchSpace {
 
                         if (verbose) logger.info("上升到节点: {}", minMaxPair.getLeft());
 
-                        maxNonFD.add(minMaxPair.getRight().getLhs());
+                        maxNonFD.add(minMaxPair.getRight().getLhsBitSet());
                         if (verbose) logger.info("添加最大nonFD: {}", minMaxPair.getRight());
                         peak = minMaxPair.getLeft();
                     }
@@ -219,13 +223,18 @@ public class SearchSpace {
 
             }
             // 逃逸
-            BitSet launchpadLhs = launchpad.getLhs();
-            List<BitSet> escapeList = escape(launchpadLhs);
-            for (BitSet escapeLhs : escapeList) {
+            long launchpadLhs = launchpad.getLhs();
+            List<Long> escapeList = escape(launchpadLhs);
+            for (long escapeLhs : escapeList) {
                 Node escapeNode = getOrCreateNode(escapeLhs);
                 estimate(escapeNode);
                 launchpads.add(escapeNode);
             }
+        }
+        
+        // 搜索完成，输出内存使用统计
+        if (verbose) {
+            logger.info("搜索完成，{}", getMemoryStats());
         }
     }
 
@@ -277,7 +286,7 @@ public class SearchSpace {
     private void trickleDown(Node peak) {
         // 需要覆盖到peak下方的所有节点，用优先队列存储所有祖先节点
         // 1. 获取所有未被剪枝的父节点，加入优先队列
-        // 2. 取出error最小的节点递归trickledown，直到找到最小FD（所有父节点都是剪枝或验证无效的）
+        // 2. 取出error最小的节点递归trickleDown，直到找到最小FD（所有父节点都是剪枝或验证无效的）
         // 3. 将最小FD加入结果集
         // 4. 继续遍历优先队列中的其他节点
         PriorityQueue<Node> queue = new PriorityQueue<>(
@@ -287,7 +296,7 @@ public class SearchSpace {
                         .thenComparingDouble(Node::getError)
         );
         queue.add(peak);
-        Set<BitSet> visited = new HashSet<>(); // 用于跟踪已处理过的节点 (LHS)
+        Set<Long> visited = new HashSet<>(); // 用于跟踪已处理过的节点 (LHS)
 
         while (!queue.isEmpty()) {
             Node currentNode = queue.peek(); // 查看队列顶部的节点，但不移除
@@ -307,7 +316,7 @@ public class SearchSpace {
                     // 如果它之前是valid的（意味着它在被标记visited时没有被poll），并且现在没有被一个更小的、新发现的FD剪枝，
                     // 那么它就是一个最小FD。
                     if (verbose) logger.info("找到最小FD: {}", currentNode);
-                    minValidFD.add(currentNode.getLhs());
+                    minValidFD.add(currentNode.getLhsBitSet());
                 }
                 // 父节点在它首次被标记为visited时（如果是valid）或被剪枝时已经加入队列探索，
                 // 所以这里可以直接continue。
@@ -344,10 +353,10 @@ public class SearchSpace {
 
             // 对于未因"无效"或"已充分处理的visited"而continue的节点（即有效的、或被剪枝的节点），
             // 将其所有父节点加入队列进行探索。
-            List<BitSet> parentsLhs = getAllParents(currentNode.getLhs());
-            for (BitSet parentLhs : parentsLhs) {
+            List<Long> parentsLhs = getAllParents(currentNode.getLhs());
+            for (long parentLhs : parentsLhs) {
                 Node parentNode = getOrCreateNode(parentLhs);
-                if (!visited.contains(parentLhs)) {
+                if (!visited.contains(parentLhs)) { // 直接使用long进行visited检查
                     estimate(parentNode);
                     queue.add(parentNode);
                 }
@@ -355,67 +364,222 @@ public class SearchSpace {
         }
     }
 
-    private List<BitSet> escape(BitSet launchpadLhs) {
-        List<BitSet> result = new ArrayList<>();
-        for (BitSet peak : peaks) {
-            if (BitSetUtils.isSubSet(launchpadLhs, peak)) {
-                BitSet newLhs = (BitSet) peak.clone();
-                newLhs.set(rhs);
-                newLhs.flip(0, dataSet.getColumnCount());
+    private List<Long> escape(long launchpadLhs) {
+        List<Long> result = new ArrayList<>();
+
+        for (long peak : peaks) {
+            if (LongBitSetUtils.isSubset(launchpadLhs, peak)) {
+                long newLhs = LongBitSetUtils.setBit(peak, rhs);
+                newLhs = LongBitSetUtils.complement(newLhs, dataSet.getColumnCount());
                 result.add(newLhs);
             }
         }
-        HittingSet hittingSet = calculateHittingSet(result, dataSet.getColumnCount());
-        result = hittingSet.getAllMinimalHittingSets();
-        // 把result中所有BitSet与launchpad union后返回
-        for (BitSet set : result) {
-            set.or(launchpadLhs);
+
+        // 优化：如果result为空，直接返回
+        if (result.isEmpty()) {
+            return result;
+        }
+
+        // 转换为BitSet进行HittingSet计算（暂时保持兼容）
+        List<BitSet> bitSetResult = new ArrayList<>();
+        for (long bits : result) {
+            BitSet bitSet = new BitSet();
+            for (int i = 0; i < dataSet.getColumnCount(); i++) {
+                if (LongBitSetUtils.testBit(bits, i)) {
+                    bitSet.set(i);
+                }
+            }
+            bitSetResult.add(bitSet);
+        }
+
+        HittingSet hittingSet = calculateHittingSet(bitSetResult, dataSet.getColumnCount());
+        List<BitSet> minimalSets = hittingSet.getAllMinimalHittingSets();
+
+        // 转换回long并与launchpad合并
+        List<Long> finalResult = new ArrayList<>();
+        for (BitSet set : minimalSets) {
+            long setLong = BitSetUtils.bitSetToLong(set, dataSet.getColumnCount());
+            finalResult.add(LongBitSetUtils.union(setLong, launchpadLhs));
+        }
+
+        return finalResult;
+    }
+
+    // 兼容性方法：从BitSet调用
+    @Deprecated
+    private List<BitSet> escape(BitSet launchpadLhs) {
+        long launchpadLong = BitSetUtils.bitSetToLong(launchpadLhs, dataSet.getColumnCount());
+        List<Long> longResult = escape(launchpadLong);
+
+        List<BitSet> result = new ArrayList<>();
+        for (long bits : longResult) {
+            BitSet bitSet = new BitSet();
+            for (int i = 0; i < dataSet.getColumnCount(); i++) {
+                if (LongBitSetUtils.testBit(bits, i)) {
+                    bitSet.set(i);
+                }
+            }
+            result.add(bitSet);
         }
         return result;
     }
 
+    private boolean checkValidPrune(long lhs) {
+        List<Integer> lhsList = LongBitSetUtils.longToList(lhs);
+        return minValidFD.containsSubSetOf(lhsList);
+    }
+
+    private boolean checkInvalidPrune(long lhs) {
+        List<Integer> lhsList = LongBitSetUtils.longToList(lhs);
+        return maxNonFD.containsSuperSetOf(lhsList);
+    }
+
+    @Deprecated
     private boolean checkValidPrune(BitSet lhs) {
-        return minValidFD.containsSubSetOf(bitSetToList(lhs));
+        return checkValidPrune(BitSetUtils.bitSetToLong(lhs, dataSet.getColumnCount()));
     }
 
+    @Deprecated
     private boolean checkInvalidPrune(BitSet lhs) {
-        return maxNonFD.containsSuperSetOf(bitSetToList(lhs));
+        return checkInvalidPrune(BitSetUtils.bitSetToLong(lhs, dataSet.getColumnCount()));
     }
 
-    private Node getOrCreateNode(BitSet lhsBitSet) {
-        long longKey = BitSetUtils.bitSetToLong(lhsBitSet, dataSet.getColumnCount());
-        
-        // 使用 computeIfAbsent 来获取或创建ID
-        int nodeId = lhsToIdMap.computeIfAbsent(longKey, k -> {
-            // 注意：这里不能直接在 lambda 表达式中修改 nodeList，
-            // 因为 computeIfAbsent 的 lambda 是为了生成 Map 的 value (即 Integer)。
-            // 我们需要先获得 ID，然后再处理 nodeList。
-            return nextNodeId++; // 返回新的ID
-        });
-
-        // 此时 nodeId 肯定存在，可能是旧的，也可能是刚通过 lambda 创建的新的
-        if (nodeId >= nodeList.size()) { 
-            // 这是一个新节点，nodeId 是刚分配的，nodeList中还没有这个索引
-            // 需要确保 nodeList 扩展到能容纳这个新 ID
-            // (理论上，如果 nextNodeId 和 nodeList.size() 同步增长，这里add的应该是正确的)
-            Node newNode = new Node(lhsBitSet, rhs);
-            nodeList.add(newNode); // 假设 add 后 newNode 的索引就是 nodeId
-            return newNode;
-        } else {
-            // 节点已存在
-            return nodeList.get(nodeId);
+    Node getOrCreateNode(long lhsLong) {
+        // 1. 先从活跃节点中查找
+        Node node = activeNodes.get(lhsLong);
+        if (node != null) {
+            updateAccessTime(lhsLong);
+            return node;
         }
+
+        // 2. 从软引用缓存中查找
+        SoftReference<Node> ref = cachedNodes.get(lhsLong);
+        if (ref != null) {
+            node = ref.get();
+            if (node != null) {
+                // 重新激活节点
+                activeNodes.put(lhsLong, node);
+                cachedNodes.remove(lhsLong);
+                updateAccessTime(lhsLong);
+                if (verbose) logger.debug("节点从缓存中重新激活: key={}", lhsLong);
+                return node;
+            } else {
+                // 软引用已被GC，清理
+                cachedNodes.remove(lhsLong);
+            }
+        }
+
+        // 3. 创建新节点
+        node = new Node(lhsLong, rhs);
+        activeNodes.put(lhsLong, node);
+        updateAccessTime(lhsLong);
+
+        // 4. 检查是否需要内存管理
+        manageMemoryIfNeeded();
+
+        return node;
+    }
+
+    @Deprecated
+    Node getOrCreateNode(BitSet lhsBitSet) {
+        long longKey = BitSetUtils.bitSetToLong(lhsBitSet, dataSet.getColumnCount());
+        return getOrCreateNode(longKey);
+    }
+    
+    /**
+     * 更新节点的访问时间（用于LRU管理）
+     */
+    private void updateAccessTime(long nodeKey) {
+        accessOrder.put(nodeKey, System.currentTimeMillis());
+    }
+    
+    /**
+     * 根据需要管理内存，将老节点降级为软引用
+     * 优先回收未验证的节点，保护已验证节点的状态
+     */
+    private void manageMemoryIfNeeded() {
+        if (activeNodes.size() <= CLEANUP_THRESHOLD) return;
+        
+        if (verbose) {
+            logger.info("开始内存管理，当前活跃节点数: {}, 缓存节点数: {}", 
+                       activeNodes.size(), cachedNodes.size());
+        }
+        
+        // 分两阶段回收：先回收未验证节点，再回收已验证节点
+        int cleaned = 0;
+        
+        // 阶段1：优先回收未验证的节点
+        cleaned += cleanupNodesByValidationStatus(false);
+        
+        // 阶段2：如果还需要回收，再回收已验证节点
+        if (cleaned < CLEANUP_BATCH_SIZE && activeNodes.size() > MAX_ACTIVE_NODES - CLEANUP_BATCH_SIZE) {
+            cleaned += cleanupNodesByValidationStatus(true);
+        }
+        
+        if (verbose && cleaned > 0) {
+            logger.info("内存管理完成，降级节点数: {}, 当前活跃节点数: {}, 缓存节点数: {}", 
+                       cleaned, activeNodes.size(), cachedNodes.size());
+        }
+    }
+    
+    /**
+     * 按验证状态清理节点
+     * @param includeValidated 是否包含已验证的节点
+     * @return 清理的节点数量
+     */
+    private int cleanupNodesByValidationStatus(boolean includeValidated) {
+        Iterator<Map.Entry<Long, Long>> it = accessOrder.entrySet().iterator();
+        int cleaned = 0;
+        
+        while (it.hasNext() && cleaned < CLEANUP_BATCH_SIZE && activeNodes.size() > MAX_ACTIVE_NODES - CLEANUP_BATCH_SIZE) {
+            Map.Entry<Long, Long> entry = it.next();
+            Long key = entry.getKey();
+            
+            Node node = activeNodes.get(key);
+            if (node != null) {
+                // 检查节点的验证状态
+                boolean shouldCleanup = includeValidated || !node.isValidated();
+                
+                if (shouldCleanup) {
+                    activeNodes.remove(key);
+                    cachedNodes.put(key, new SoftReference<>(node));
+                    cleaned++;
+                    it.remove();
+                } else {
+                    // 跳过已验证节点，但更新其访问时间以避免被过早回收
+                    updateAccessTime(key);
+                }
+            } else {
+                it.remove();
+            }
+        }
+        
+        return cleaned;
+    }
+    
+    /**
+     * 获取内存使用统计信息（用于调试）
+     */
+    public String getMemoryStats() {
+        // 清理已被GC的软引用
+        cachedNodes.entrySet().removeIf(entry -> entry.getValue().get() == null);
+        
+        return String.format("内存统计 - 活跃节点: %d, 缓存节点: %d, 访问记录: %d", 
+                           activeNodes.size(), cachedNodes.size(), accessOrder.size());
     }
 
     private MinMaxPair<Node> getMinMaxChildren(Node node) {
         MinMaxPair<Node> minMaxPair = new MinMaxPair<>(null, null);
+        long parentLhs = node.getLhs(); // 直接使用long
+
         for (int i = 0; i < dataSet.getColumnCount(); i++) {
-            if (!node.getLhs().get(i) && i != rhs) {
-                BitSet newLhs = (BitSet) node.getLhs().clone();
-                newLhs.set(i);
-                if (!checkValidPrune(newLhs)) {
-                    // 假设node已经经过剪枝检验，如果有剪枝一定是被minValidFD剪，因为如果被maxNonFD剪，node本身就被剪了
-                    Node child = getOrCreateNode(newLhs);
+            if (!LongBitSetUtils.testBit(parentLhs, i) && i != rhs) {
+                // 使用高效的位操作创建子节点
+                long childLhs = LongBitSetUtils.setBit(parentLhs, i);
+
+                // 高效的剪枝检查
+                if (!checkValidPrune(childLhs)) {
+                    Node child = getOrCreateNode(childLhs);
                     estimate(child);
                     minMaxPair.update(child);
                 }
@@ -426,12 +590,16 @@ public class SearchSpace {
 
     private Node getMaxChildren(Node node) {
         Node maxNode = null;
+        long parentLhs = node.getLhs(); // 直接使用long
+
         for (int i = 0; i < dataSet.getColumnCount(); i++) {
-            if (!node.getLhs().get(i) && i != rhs) {
-                BitSet newLhs = (BitSet) node.getLhs().clone();
-                newLhs.set(i);
-                if (!checkValidPrune(newLhs)) {
-                    Node child = getOrCreateNode(newLhs);
+            if (!LongBitSetUtils.testBit(parentLhs, i) && i != rhs) {
+                // 使用高效的位操作创建子节点
+                long childLhs = LongBitSetUtils.setBit(parentLhs, i);
+
+                // 高效的剪枝检查
+                if (!checkValidPrune(childLhs)) {
+                    Node child = getOrCreateNode(childLhs);
                     estimate(child);
                     if (maxNode == null) {
                         maxNode = child;
@@ -444,18 +612,26 @@ public class SearchSpace {
         return maxNode;
     }
 
+    private List<Long> getAllParents(long lhs) {
+        // 使用LongBitSetUtils的高效缓存
+        Set<Long> parentsSet = LongBitSetUtils.getAllParents(lhs);
+        return new ArrayList<>(parentsSet);
+    }
+
+    @Deprecated
     private List<BitSet> getAllParents(BitSet lhs) {
-        List<BitSet> result = new ArrayList<>();
-        if (lhs.isEmpty()) { // 空集的父节点就是它自己（或没有严格意义的父节点）
-            return result; // 返回空列表，避免进一步处理
-        }
-        for (int i = lhs.nextSetBit(0); i >= 0; i = lhs.nextSetBit(i + 1)) {
-            BitSet newLhs = (BitSet) lhs.clone();
-            newLhs.clear(i);
-            result.add(newLhs);
-        }
-        if (result.get(0).isEmpty()) {
-            return new ArrayList<>();
+        long lhsLong = BitSetUtils.bitSetToLong(lhs, dataSet.getColumnCount());
+        List<Long> longParents = getAllParents(lhsLong);
+
+        List<BitSet> result = new ArrayList<>(longParents.size());
+        for (long parent : longParents) {
+            BitSet parentBitSet = new BitSet();
+            for (int i = 0; i < dataSet.getColumnCount(); i++) {
+                if ((parent & (1L << i)) != 0) {
+                    parentBitSet.set(i);
+                }
+            }
+            result.add(parentBitSet);
         }
         return result;
     }
@@ -497,7 +673,9 @@ public class SearchSpace {
     private void validate(Node node) {
         timer.start("validate");
         if (node.isValidated()) return;
-        node.setError(measure.calculateError(node.getLhs(), rhs, dataSet, cache));
+        // 转换long为BitSet用于接口调用
+        BitSet lhsBitSet = longToBitSet(node.getLhs());
+        node.setError(measure.calculateError(lhsBitSet, rhs, dataSet, cache));
         node.setValidated();
         validateCount++;
         timer.end("validate");
@@ -505,10 +683,23 @@ public class SearchSpace {
 
     private void estimate(Node node) {
         if (node.isEstimated()) return;
+        // 转换long为BitSet用于接口调用
+        BitSet lhsBitSet = longToBitSet(node.getLhs());
         if (samplingStrategy != null) {
-            samplingStrategy.initialize(dataSet, cache, node.getLhs(), rhs, sampleParam);
+            samplingStrategy.initialize(dataSet, cache, lhsBitSet, rhs, sampleParam);
         }
-        node.setError(measure.estimateError(node.getLhs(), rhs, dataSet, cache, samplingStrategy));
+        node.setError(measure.estimateError(lhsBitSet, rhs, dataSet, cache, samplingStrategy));
+    }
+
+    // 高效的long到BitSet转换方法
+    private BitSet longToBitSet(long bits) {
+        BitSet bitSet = new BitSet();
+        for (int i = 0; i < dataSet.getColumnCount(); i++) {
+            if ((bits & (1L << i)) != 0) {
+                bitSet.set(i);
+            }
+        }
+        return bitSet;
     }
 
     public List<FunctionalDependency> getValidatedFDs() {
