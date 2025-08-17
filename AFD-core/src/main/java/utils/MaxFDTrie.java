@@ -7,16 +7,52 @@ import java.util.Map;
 import static utils.BitSetUtils.bitSetToList;
 
 /**
+ * MaxFDTrie - 最大无效函数依赖的Trie存储结构
+ * 支持BitSet和long两种位集合表示，long版本性能更优
+ *
  * @author Hoshi
- * @version 1.0
+ * @version 2.0
  * @since 2025/5/6
  */
 public class MaxFDTrie extends Trie<Boolean>{
+
+    // ==================== 新的long版本方法（性能优化） ====================
+
+    /**
+     * 添加long表示的位集合到Trie中（long版本，性能更优）
+     * @param bits long表示的位集合（支持最多64列）
+     */
+    public void add(long bits) {
+        List<Integer> key = LongBitSetUtils.longToList(bits);
+        set(key, true);
+    }
+
+    /**
+     * 检查Trie中是否包含指定位集合的超集（long版本，性能更优）
+     * @param bits long表示的位集合（支持最多64列）
+     * @return 如果Trie中存在bits的超集则返回true，否则返回false
+     */
+    public boolean containsSuperSetOf(long bits) {
+        List<Integer> key = LongBitSetUtils.longToList(bits);
+        return containsSuperSetOf(key);
+    }
+
+    // ==================== 原有BitSet版本方法（兼容性） ====================
+
+    /**
+     * 添加BitSet表示的位集合到Trie中（BitSet版本，兼容性方法）
+     * @param bitSetKey BitSet表示的位集合
+     */
     public void add(BitSet bitSetKey) {
         List<Integer> key = bitSetToList(bitSetKey);
         set(key, true);
     }
 
+    /**
+     * 检查Trie中是否包含指定列表的超集（List版本，兼容性方法）
+     * @param key 整数列表表示的位集合
+     * @return 如果Trie中存在key的超集则返回true，否则返回false
+     */
     public boolean containsSuperSetOf(List<Integer> key) {
         return containsSuperSetOfHelper(getRoot(), key, 0);
     }

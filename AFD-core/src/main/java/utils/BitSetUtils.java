@@ -67,6 +67,46 @@ public class BitSetUtils {
         return temp.equals(subSet);
     }
 
+    /**
+     * 计算最小命中集
+     * @param sets long表示的位集合列表
+     * @param columnCount 列数
+     * @return 包含所有最小命中集的HittingSet
+     */
+    public static HittingSet calculateHittingSet(List<Long> sets, int columnCount) {
+        LongBitSetUtils.validateColumnCount(columnCount);
+
+        HittingSet hittingset = new HittingSet();
+        // 按long的cardinality升序排序
+        sets.sort(Comparator.comparingInt(LongBitSetUtils::cardinality));
+
+        for (long set : sets) {
+            if (hittingset.isEmpty()) {
+                // 初始化：为第一个集合的每个元素创建单元素集合
+                LongBitSetUtils.forEach(set, i -> {
+                    long newSet = LongBitSetUtils.setBit(0L, i);
+                    hittingset.add(newSet);
+                });
+                continue;
+            }
+
+            long sFlip = LongBitSetUtils.complement(set, columnCount);
+            // 移除hittingset中sFlip的子集
+            List<Long> removed = hittingset.removeSubsets(sFlip);
+
+            for (long removedSet : removed) {
+                LongBitSetUtils.forEach(set, i -> {
+                    long newLongSet = LongBitSetUtils.setBit(removedSet, i);
+                    hittingset.addIfNoSubset(newLongSet);
+                });
+            }
+        }
+        return hittingset;
+    }
+
+    // ==================== 原有BitSet版本方法====================
+
+    /*
     public static HittingSet calculateHittingSet(List<BitSet> sets, int nbits) {
         HittingSet hittingset = new HittingSet();
         // 按BitSet的cardinality升序排序
@@ -94,4 +134,5 @@ public class BitSetUtils {
         }
         return hittingset;
     }
+     */
 }

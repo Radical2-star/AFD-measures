@@ -15,17 +15,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.*;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
 import java.util.concurrent.*;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
+import sampling.SamplingStrategy;
 
 /**
  * @author Hoshi
@@ -35,269 +27,65 @@ import java.util.stream.Stream;
 public class ExperimentRunner {
     private static final Logger logger = LoggerFactory.getLogger(ExperimentRunner.class);
 
-    // 采样方法选择枚举
-    public enum SamplingMode {
-        ALL,            // 运行所有采样方法
-        NO_SAMPLING,    // 只运行不采样方法
-        RANDOM,         // 只运行随机采样方法
-        FOCUSED,        // 只运行聚焦采样方法
-        NEYMAN          // 只运行Neyman采样方法
+    // 算法类型枚举
+    public enum AlgorithmType {
+        PYRO,       // 执行Pyro算法
+        TANE        // 执行TANE算法
     }
 
-    // --- 可配置的实验参数 (增加了默认值) ---
-    public static double MAX_ERROR = 0.05;
-    public static double SAMPLE_PARAM = 200;
-    public static Long RANDOM_SEED = 114514L; // 可以设置为null表示纯随机
-    public static boolean USE_DYNAMIC_THRESHOLD = false;
-    public static boolean VERBOSE = false;
-    public static final ErrorMeasure MEASURE = new G3Measure();
-    
-    // 数据集配置 (通过命令行参数 --dataset 指定)
-    public static String DATASET_PATH = "data/0"; // 默认数据集路径，可以是文件或目录
-    // public static boolean USE_DIRECTORY_MODE = true; // true: 使用目录模式, false: 使用硬编码列表模式
-    
-    // 硬编码列表模式：指定数据集列表
-    // public static List<String> DATASET_PATHS = List.of(
-    //     "data/0/bio_entry.csv",
-    //     "data/0/classification.csv",
-    //     "data/abalone.csv",
-    //     "data/atom_new.csv",
-    //     "data/test_new.csv",
-    //     "data/airport.csv",
-    //      "data/1_CLASSIFICATION_new.csv",
-    //     "data/CENSUS_50000_new.csv"
-    //     // "data/hepa.csv",
-    //     // "data/ncvoter.csv"
-    // );
+    // 采样方法选择枚举
+    public enum SamplingMode {
+        NO_SAMPLING,    // 不采样
+        RANDOM,         // 随机采样
+        FOCUSED,        // 聚焦采样
+        NEYMAN          // Neyman采样
+    }
 
-    // 实验控制配置
-    public static boolean RUN_TANE = true; // 是否运行TANE算法
-    public static SamplingMode SAMPLING_MODE = SamplingMode.ALL; // 采样方法选择
-    
-    public static String RESULTS_FILE = "result/result0721.csv";
-    public static ResultManager.RunMode RUN_MODE = ResultManager.RunMode.APPEND;
-    // 可以设置为APPEND或OVERWRITE
-    public static boolean USE_TIME_SUFFIX = false; // 是否在结果文件名后添加时间后缀
-    public static long ALGORITHM_TIMEOUT_MINUTES = 120; // 每个算法执行的超时时间，单位：分钟
+    // === 单一实验执行参数 ===
+    // 这些参数将通过命令行参数传入，而非硬编码
+    private static String datasetPath;
+    private static String resultsFile;
+    private static AlgorithmType algorithmType;
+    private static SamplingMode samplingMode;
+    private static ResultManager.RunMode runMode;
+    private static double maxError = 0.05;
+    private static double sampleParam = 200;
+    private static Long randomSeed = 114514L;
+    private static boolean useDynamicThreshold = false;
+    private static boolean verbose = false;
+    private static long timeoutMinutes = 120;
+    private static final ErrorMeasure MEASURE = new G3Measure();
 
     public static void main(String[] args) {
-        // --- 1. 解析命令行参数 ---
+        try {
+            // 1. 解析命令行参数
         parseArgs(args);
 
-        // --- 2. 根据模式获取数据集列表 ---
-        List<String> datasetPaths;
-        File datasetFileOrDir = new File(DATASET_PATH);
-
-        if (datasetFileOrDir.isDirectory()) {
-            try {
-                datasetPaths = getDatasetPaths(DATASET_PATH);
-                System.out.println("目录模式：找到 " + datasetPaths.size() + " 个数据集文件（按CSV列数从少到多排序）:");
-                // 打印文件名、列数和检测到的分隔符
-                for (String path : datasetPaths) {
-                    char delimiter = detectDelimiter(path);
-                    int columns = getColumnCount(path);
-                    int rows = getRowCount(path);
-                    System.out.println(path + " (列数: " + columns + ", 行数: " + rows +
-                            ", 分隔符: " + (delimiter == ',' ? "逗号" : delimiter == ';' ? "分号" : delimiter) + ")");
-                }
-            } catch (IOException e) {
-                System.err.println("读取数据集目录失败: " + e.getMessage());
-                return;
-            }
-
-            if (datasetPaths.isEmpty()) {
-                System.err.println("警告: 在 " + DATASET_PATH + " 目录下没有找到任何文件，请检查路径是否正确。");
-                return;
-            }
-        } else if (datasetFileOrDir.isFile()) {
-            datasetPaths = new ArrayList<>(List.of(DATASET_PATH));
-            System.out.println("文件模式：使用 " + datasetPaths.size() + " 个预定义数据集:");
-            for (String path : datasetPaths) {
-                try {
-                    char delimiter = detectDelimiter(path);
-                    int columns = getColumnCount(path);
-                    int rows = getRowCount(path);
-                    System.out.println(path + " (列数: " + columns + ", 行数: " + rows +
-                            ", 分隔符: " + (delimiter == ',' ? "逗号" : delimiter == ';' ? "分号" : delimiter) + ")");
-                } catch (IOException e) {
-                    System.err.println("读取文件失败: " + path + " | " + e.getMessage());
-                }
-            }
-        } else {
-            System.err.println("错误: 数据集路径 " + DATASET_PATH + " 不是一个有效的文件或目录。");
-            return;
-        }
-        
-        // --- 3. 处理结果文件名 ---
-        String resultFilePath = RESULTS_FILE;
-        if (USE_TIME_SUFFIX) {
-            String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("MMddHHmm"));
-            int dotIndex = RESULTS_FILE.lastIndexOf('.');
-            if (dotIndex > 0) {
-                resultFilePath = RESULTS_FILE.substring(0, dotIndex) + "_" + timestamp + RESULTS_FILE.substring(dotIndex);
-            } else {
-                resultFilePath = RESULTS_FILE + "_" + timestamp;
-            }
-        }
-
-        // --- 4. 根据采样模式选择实验配置 ---
-        List<ExperimentConfig> configs = getConfigsBySamplingMode(SAMPLING_MODE);
-        System.out.println("采样模式: " + SAMPLING_MODE + ", 将运行 " + configs.size() + " 种采样策略");
-
-        // TANE配置 (TANE不支持采样)
-        ExperimentConfig taneConfig = new ExperimentConfig("G3-No-Sampling", MEASURE, null, MAX_ERROR, 0, null, false, false);
-
-        // --- 5. 内存预检查和配置优化 ---
-        performMemoryPreCheck(datasetPaths);
+            // 2. 验证必需参数
+            validateRequiredParameters();
+            
+            // 3. 配置内存优化
         configureMemoryOptimization();
 
-        // 启动全局内存监控
-        MemoryMonitor memoryMonitor = MemoryMonitor.getInstance();
-        memoryMonitor.startMonitoring(10000, alert -> {
-            if (alert.getLevel() == MemoryMonitor.AlertLevel.CRITICAL) {
-                logger.error("实验执行中检测到严重内存压力: {}", alert);
-                System.err.println("警告: 检测到严重内存压力，建议增加堆内存或减少数据集规模");
-            } else if (alert.getLevel() == MemoryMonitor.AlertLevel.WARNING) {
-                logger.warn("实验执行中检测到内存压力: {}", alert);
-            }
-        });
-
-        // --- 6. 初始化执行器和结果管理器 ---
-        AFDFinder pyro = new PyroExecutor();
-        AFDFinder tane = new TaneExecutor();
-        ResultManager resultManager = new ResultManager(resultFilePath, RUN_MODE);
-
-        // 创建线程池
-        ExecutorService executorService = Executors.newSingleThreadExecutor();
-
-        // --- 7. 运行实验并收集结果 ---
-        for (String path : datasetPaths) {
+            // 4. 执行单个实验
+            ExperimentResult result = executeSingleExperiment();
+            
+            // 5. 保存结果
+            saveResult(result);
+            
+            System.out.println("\n============================================================");
+            System.out.println("单一实验执行完成");
+            System.out.println("数据集: " + datasetPath);
+            System.out.println("算法: " + algorithmType);
+            System.out.println("采样模式: " + samplingMode);
+            System.out.println("结果文件: " + resultsFile);
             System.out.println("============================================================");
-            System.out.println("Processing Dataset: " + path);
-            DataSet dataSet;
-            int columns = -1;
-            int rows = -1;
-
-            try {
-                // 获取数据集信息
-                columns = getColumnCount(path);
-                rows = getRowCount(path);
-
-                // 根据数据集大小调整超时时间
-                long datasetSize = (long) columns * rows;
-                long adjustedTimeout = calculateTimeoutForDataset(datasetSize);
-
-                System.out.println("数据集规模: " + columns + "列 × " + rows + "行 = " + datasetSize + " 个数据点");
-                System.out.println("调整后的超时时间: " + adjustedTimeout + " 分钟");
-
-                // 检测正确的分隔符并设置
-                dataSet = DataLoader.fromFile(Path.of(path))
-                        .withHeader(true)
-                        .withDelimiter(detectDelimiter(path))  // 使用检测到的分隔符
-                        .load();
-
-                // 输出当前内存状态
-                MemoryMonitor.MemorySnapshot snapshot = memoryMonitor.getCurrentMemorySnapshot();
-                System.out.println("当前内存使用: " + snapshot.getUsedHeapMemory() / (1024 * 1024) + "MB / " +
-                                 snapshot.getMaxHeapMemory() / (1024 * 1024) + "MB (" +
-                                 String.format("%.1f%%", snapshot.getUsageRatio() * 100) + ")");
-                // --- 运行Pyro (对选中的采样策略)---
-                for (ExperimentConfig config : configs) {
-                    System.out.println("  Running Config: " + config.getConfigName() + " with Pyro");
-
-                    if (resultManager.isResultExists(path, config.getConfigName(), "Pyro")) {
-                        System.out.println("    -> Pyro result already exists. Skipping.");
-                    } else {
-                        try {
-                            // 使用Future和超时来执行Pyro算法
-                            Future<ExperimentResult> future = executorService.submit(() -> pyro.discover(dataSet, config));
-
-                            try {
-                                ExperimentResult pyroResult = future.get(adjustedTimeout, TimeUnit.MINUTES);
-                                resultManager.writeResult(path, config.getConfigName(), "Pyro", pyroResult, columns, rows);
-                                System.out.println("    -> Pyro result saved.");
-
-                                // 输出性能统计
-                                if (pyroResult.getPeakMemoryUsageMB() > 0) {
-                                    System.out.println("    -> 内存峰值: " + pyroResult.getPeakMemoryUsageMB() + "MB");
-                                }
-                                if (!pyroResult.getPliPerformanceStats().isEmpty()) {
-                                    System.out.println("    -> PLI统计: " + pyroResult.getPliPerformanceStats());
-                                }
-                            } catch (TimeoutException e) {
-                                future.cancel(true);
-                                System.err.println("    -> Pyro timed out after " + adjustedTimeout + " minutes");
-                                resultManager.writeError(path, config.getConfigName(), "Pyro",
-                                        new Exception("Algorithm timeout after " + adjustedTimeout + " minutes"),
-                                        columns, rows);
-                            } catch (ExecutionException e) {
-                                System.err.println("    -> Pyro failed: " + (e.getCause() != null ? e.getCause().getMessage() : e.getMessage()));
-                                resultManager.writeError(path, config.getConfigName(), "Pyro",
-                                        new Exception(e.getCause() != null ? e.getCause().getMessage() : e.getMessage()),
-                                        columns, rows);
-                            }
+            
                         } catch (Exception e) {
-                            System.err.println("    -> Pyro failed: " + e.getMessage());
-                            resultManager.writeError(path, config.getConfigName(), "Pyro", e, columns, rows);
-                        }
-                    }
-                }
-
-                // --- 运行TANE (如果开启) ---
-                if (RUN_TANE) {
-                    System.out.println("  Running TANE (no sampling)");
-
-                    if (resultManager.isResultExists(path, taneConfig.getConfigName(), "TANE")) {
-                        System.out.println("    -> TANE result already exists. Skipping.");
-                    } else {
-                        try {
-                            // 使用Future和超时来执行TANE算法
-                            Future<ExperimentResult> future = executorService.submit(() -> tane.discover(dataSet, taneConfig));
-
-                            try {
-                                ExperimentResult taneResult = future.get(adjustedTimeout, TimeUnit.MINUTES);
-                                resultManager.writeResult(path, taneConfig.getConfigName(), "TANE", taneResult, columns, rows);
-                                System.out.println("    -> TANE result saved.");
-
-                                // 输出性能统计
-                                if (taneResult.getPeakMemoryUsageMB() > 0) {
-                                    System.out.println("    -> 内存峰值: " + taneResult.getPeakMemoryUsageMB() + "MB");
-                                }
-                                if (!taneResult.getPliPerformanceStats().isEmpty()) {
-                                    System.out.println("    -> PLI统计: " + taneResult.getPliPerformanceStats());
-                                }
-                            } catch (TimeoutException e) {
-                                future.cancel(true);
-                                System.err.println("    -> TANE timed out after " + adjustedTimeout + " minutes");
-                                resultManager.writeError(path, taneConfig.getConfigName(), "TANE",
-                                        new Exception("Algorithm timeout after " + adjustedTimeout + " minutes"),
-                                        columns, rows);
-                            } catch (ExecutionException e) {
-                                System.err.println("    -> TANE failed: " + (e.getCause() != null ? e.getCause().getMessage() : e.getMessage()));
-                                resultManager.writeError(path, taneConfig.getConfigName(), "TANE",
-                                        new Exception(e.getCause() != null ? e.getCause().getMessage() : e.getMessage()),
-                                        columns, rows);
-                            }
-                        } catch (Exception e) {
-                            System.err.println("    -> TANE failed: " + e.getMessage());
-                            resultManager.writeError(path, taneConfig.getConfigName(), "TANE", e, columns, rows);
-                        }
-                    }
-                } else {
-                    System.out.println("  TANE execution is disabled.");
-                }
-            } catch (Exception e) {
-                System.err.println("Could not load dataset: " + path + " | " + e.getMessage());
-                continue;
-            }
+            logger.error("实验执行失败", e);
+            System.err.println("实验执行失败: " + e.getMessage());
+            System.exit(1);
         }
-        
-        // 关闭线程池
-        executorService.shutdown();
-        
-        System.out.println("\n============================================================");
-        System.out.println("All experiments finished. Results are in " + resultFilePath);
-        System.out.println("============================================================");
     }
     
     /**
@@ -312,40 +100,37 @@ public class ExperimentRunner {
                 i++; // Consume value
                 switch (arg) {
                     case "--dataset":
-                        DATASET_PATH = value;
+                        datasetPath = value;
                         break;
                     case "--results-file":
-                        RESULTS_FILE = value;
+                        resultsFile = value;
                         break;
-                    case "--max-error":
-                        MAX_ERROR = Double.parseDouble(value);
-                        break;
-                    case "--sample-param":
-                        SAMPLE_PARAM = Double.parseDouble(value);
+                    case "--algorithm":
+                        algorithmType = AlgorithmType.valueOf(value.toUpperCase());
                         break;
                     case "--sampling-mode":
-                        SAMPLING_MODE = SamplingMode.valueOf(value.toUpperCase());
-                        break;
-                    case "--run-tane":
-                        RUN_TANE = Boolean.parseBoolean(value);
+                        samplingMode = SamplingMode.valueOf(value.toUpperCase());
                         break;
                     case "--run-mode":
-                        RUN_MODE = ResultManager.RunMode.valueOf(value.toUpperCase());
+                        runMode = ResultManager.RunMode.valueOf(value.toUpperCase());
+                        break;
+                    case "--max-error":
+                        maxError = Double.parseDouble(value);
+                        break;
+                    case "--sample-param":
+                        sampleParam = Double.parseDouble(value);
                         break;
                     case "--timeout":
-                        ALGORITHM_TIMEOUT_MINUTES = Long.parseLong(value);
+                        timeoutMinutes = Long.parseLong(value);
                         break;
                     case "--seed":
-                        RANDOM_SEED = Long.parseLong(value);
+                        randomSeed = Long.parseLong(value);
                         break;
                     case "--use-dynamic-threshold":
-                        USE_DYNAMIC_THRESHOLD = Boolean.parseBoolean(value);
-                        break;
-                    case "--use-time-suffix":
-                        USE_TIME_SUFFIX = Boolean.parseBoolean(value);
+                        useDynamicThreshold = Boolean.parseBoolean(value);
                         break;
                     case "--verbose":
-                        VERBOSE = Boolean.parseBoolean(value);
+                        verbose = Boolean.parseBoolean(value);
                         break;
                     default:
                         System.err.println("警告: 未知参数 " + arg);
@@ -356,43 +141,281 @@ public class ExperimentRunner {
     }
     
     /**
-     * 根据采样模式获取对应的实验配置列表
-     * @param mode 采样模式
-     * @return 实验配置列表
+     * 验证必需参数
      */
-    private static List<ExperimentConfig> getConfigsBySamplingMode(SamplingMode mode) {
-        // 创建各种采样配置
-        ExperimentConfig noSamplingConfig = new ExperimentConfig(
-                "G3-No-Sampling", MEASURE, null, MAX_ERROR, 0, null, false, false);
-        
-        ExperimentConfig randomSamplingConfig = new ExperimentConfig(
-                "G3-Random-Sampling", MEASURE, RandomSampling.class, MAX_ERROR, SAMPLE_PARAM, 
-                RANDOM_SEED, USE_DYNAMIC_THRESHOLD, VERBOSE);
-        
-        ExperimentConfig focusedSamplingConfig = new ExperimentConfig(
-                "G3-Focused-Sampling", MEASURE, FocusedSampling.class, MAX_ERROR, SAMPLE_PARAM, 
-                RANDOM_SEED, USE_DYNAMIC_THRESHOLD, VERBOSE);
-        
-        ExperimentConfig neymanSamplingConfig = new ExperimentConfig(
-                "G3-Neyman-Sampling", MEASURE, NeymanSampling.class, MAX_ERROR, SAMPLE_PARAM, 
-                RANDOM_SEED, USE_DYNAMIC_THRESHOLD, VERBOSE);
-        
-        // 根据模式选择配置
-        switch (mode) {
-            case ALL:
-                return List.of(noSamplingConfig, randomSamplingConfig, focusedSamplingConfig, neymanSamplingConfig);
-            case NO_SAMPLING:
-                return List.of(noSamplingConfig);
-            case RANDOM:
-                return List.of(randomSamplingConfig);
-            case FOCUSED:
-                return List.of(focusedSamplingConfig);
-            case NEYMAN:
-                return List.of(neymanSamplingConfig);
-            default:
-                // 默认运行所有采样方法
-                return List.of(noSamplingConfig, randomSamplingConfig, focusedSamplingConfig, neymanSamplingConfig);
+    private static void validateRequiredParameters() {
+        if (datasetPath == null || datasetPath.isEmpty()) {
+            throw new IllegalArgumentException("必需参数: --dataset");
         }
+        if (resultsFile == null || resultsFile.isEmpty()) {
+            throw new IllegalArgumentException("必需参数: --results-file");
+        }
+        if (algorithmType == null) {
+            throw new IllegalArgumentException("必需参数: --algorithm (PYRO|TANE)");
+        }
+        if (samplingMode == null) {
+            throw new IllegalArgumentException("必需参数: --sampling-mode (NO_SAMPLING|RANDOM|FOCUSED|NEYMAN)");
+        }
+        if (runMode == null) {
+            throw new IllegalArgumentException("必需参数: --run-mode (APPEND|OVERWRITE)");
+        }
+        
+        // 验证文件存在性
+        File datasetFile = new File(datasetPath);
+        if (!datasetFile.exists() || !datasetFile.isFile()) {
+            throw new IllegalArgumentException("数据集文件不存在: " + datasetPath);
+        }
+        
+        // TANE算法不支持采样，验证参数组合
+        if (algorithmType == AlgorithmType.TANE && samplingMode != SamplingMode.NO_SAMPLING) {
+            System.out.println("警告: TANE算法不支持采样，将强制使用NO_SAMPLING模式");
+            samplingMode = SamplingMode.NO_SAMPLING;
+        }
+    }
+    
+    /**
+     * 执行单个实验
+     */
+    private static ExperimentResult executeSingleExperiment() throws Exception {
+        System.out.println("============================================================");
+        System.out.println("开始执行单一实验");
+        System.out.println("数据集: " + datasetPath);
+        System.out.println("算法: " + algorithmType);
+        System.out.println("采样模式: " + samplingMode);
+        System.out.println("最大错误率: " + maxError);
+        System.out.println("采样参数: " + sampleParam);
+        System.out.println("随机种子: " + randomSeed);
+        System.out.println("超时时间: " + timeoutMinutes + " 分钟");
+        System.out.println("============================================================");
+        
+        // 1. 加载数据集
+        DataSet dataSet = loadDataset();
+        
+        // 2. 创建实验配置
+        ExperimentConfig config = createExperimentConfig();
+        
+        // 3. 选择并执行算法
+        AFDFinder algorithm = createAlgorithm();
+        
+        // 4. 启动内存监控
+        MemoryMonitor memoryMonitor = startMemoryMonitoring();
+        
+        try {
+            // 5. 执行算法（带超时）
+            ExperimentResult result = executeWithTimeout(algorithm, dataSet, config);
+            
+            // 6. 输出执行统计
+            printExecutionStats(result);
+            
+            return result;
+            
+        } finally {
+            // 7. 停止内存监控
+            if (memoryMonitor != null) {
+                memoryMonitor.stopMonitoring();
+            }
+        }
+    }
+    
+    /**
+     * 加载数据集
+     */
+    private static DataSet loadDataset() throws Exception {
+        System.out.println("正在加载数据集: " + datasetPath);
+        
+        // 检测分隔符
+        char delimiter = detectDelimiter(datasetPath);
+        System.out.println("检测到分隔符: " + (delimiter == ',' ? "逗号" : delimiter == ';' ? "分号" : delimiter == '\t' ? "制表符" : delimiter));
+        
+        // 获取数据集信息
+        int columns = getColumnCount(datasetPath);
+        int rows = getRowCount(datasetPath);
+        System.out.println("数据集规模: " + columns + "列 × " + rows + "行 = " + ((long) columns * rows) + " 个数据点");
+        
+        // 加载数据集
+        DataSet dataSet = DataLoader.fromFile(Path.of(datasetPath))
+                .withHeader(true)
+                .withDelimiter(delimiter)
+                .load();
+        
+        System.out.println("数据集加载完成");
+        return dataSet;
+    }
+    
+    /**
+     * 创建实验配置
+     */
+    private static ExperimentConfig createExperimentConfig() {
+        Class<? extends SamplingStrategy> samplingClass = null;
+        String configName = "G3-No-Sampling";
+        
+        // 根据采样模式选择采样策略类
+        switch (samplingMode) {
+            case RANDOM:
+                samplingClass = RandomSampling.class;
+                configName = "G3-Random-Sampling";
+                break;
+            case FOCUSED:
+                samplingClass = FocusedSampling.class;
+                configName = "G3-Focused-Sampling";
+                break;
+            case NEYMAN:
+                samplingClass = NeymanSampling.class;
+                configName = "G3-Neyman-Sampling";
+                break;
+            case NO_SAMPLING:
+            default:
+                // 保持默认值
+                break;
+        }
+        
+        return new ExperimentConfig(
+                configName,
+                MEASURE,
+                samplingClass,
+                maxError,
+                sampleParam,
+                randomSeed,
+                useDynamicThreshold,
+                verbose
+        );
+    }
+    
+    /**
+     * 创建算法实例
+     */
+    private static AFDFinder createAlgorithm() {
+        switch (algorithmType) {
+            case PYRO:
+                return new PyroExecutor();
+            case TANE:
+                return new TaneExecutor();
+            default:
+                throw new IllegalArgumentException("未知的算法类型: " + algorithmType);
+        }
+    }
+    
+    /**
+     * 启动内存监控
+     */
+    private static MemoryMonitor startMemoryMonitoring() {
+        MemoryMonitor memoryMonitor = MemoryMonitor.getInstance();
+        memoryMonitor.startMonitoring(10000, alert -> {
+            if (alert.getLevel() == MemoryMonitor.AlertLevel.CRITICAL) {
+                logger.error("检测到严重内存压力: {}", alert);
+                System.err.println("⚠️ 严重内存压力: " + alert);
+            } else if (alert.getLevel() == MemoryMonitor.AlertLevel.WARNING) {
+                logger.warn("检测到内存压力: {}", alert);
+                System.out.println("⚠️ 内存压力警告: " + alert);
+            }
+        });
+        
+        // 显示当前内存状态
+        MemoryMonitor.MemorySnapshot snapshot = memoryMonitor.getCurrentMemorySnapshot();
+        System.out.println("当前内存使用: " + snapshot.getUsedHeapMemory() / (1024 * 1024) + "MB / " +
+                         snapshot.getMaxHeapMemory() / (1024 * 1024) + "MB (" +
+                         String.format("%.1f%%", snapshot.getUsageRatio() * 100) + ")");
+        
+        return memoryMonitor;
+    }
+    
+    /**
+     * 带超时执行算法
+     */
+    private static ExperimentResult executeWithTimeout(AFDFinder algorithm, DataSet dataSet, ExperimentConfig config) throws Exception {
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        
+        try {
+            Future<ExperimentResult> future = executor.submit(() -> algorithm.discover(dataSet, config));
+            return future.get(timeoutMinutes, TimeUnit.MINUTES);
+            
+        } catch (TimeoutException e) {
+            throw new Exception("算法执行超时 (" + timeoutMinutes + " 分钟)");
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof Exception) {
+                throw (Exception) cause;
+            } else {
+                throw new Exception("算法执行失败", cause);
+            }
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+    
+    /**
+     * 输出执行统计信息
+     */
+    private static void printExecutionStats(ExperimentResult result) {
+        System.out.println("\n实验执行完成:");
+        System.out.println("  发现的函数依赖数量: " + result.getFds().size());
+        System.out.println("  执行时间: " + result.getExecutionTimeMs() + " 毫秒");
+        System.out.println("  验证次数: " + result.getValidationCount());
+        
+        if (result.getPeakMemoryUsageMB() > 0) {
+            System.out.println("  内存峰值: " + result.getPeakMemoryUsageMB() + "MB");
+        }
+        if (!result.getPliPerformanceStats().isEmpty()) {
+            System.out.println("  PLI统计: " + result.getPliPerformanceStats());
+        }
+        if (!result.getMemoryStats().isEmpty()) {
+            System.out.println("  内存统计: " + result.getMemoryStats());
+        }
+    }
+    
+    /**
+     * 保存实验结果
+     */
+    private static void saveResult(ExperimentResult result) throws Exception {
+        System.out.println("\n正在保存实验结果到: " + resultsFile);
+        
+        // 获取数据集信息用于结果记录
+        int columns = getColumnCount(datasetPath);
+        int rows = getRowCount(datasetPath);
+        
+        // 创建结果管理器并保存结果
+        ResultManager resultManager = new ResultManager(resultsFile, runMode);
+        
+        ExperimentConfig config = createExperimentConfig();
+        resultManager.writeResult(
+                datasetPath,
+                config.getConfigName(),
+                algorithmType.toString(),
+                result,
+                columns,
+                rows
+        );
+        
+        System.out.println("实验结果保存完成");
+    }
+    
+    /**
+     * 配置内存优化参数
+     */
+    private static void configureMemoryOptimization() {
+        Runtime runtime = Runtime.getRuntime();
+        long maxMemoryMB = runtime.maxMemory() / (1024 * 1024);
+
+        // 根据可用内存动态配置PLI缓存限制
+        if (maxMemoryMB >= 8192) { // 8GB+
+            System.setProperty("pli.cache.max.memory.mb", "2048");
+            System.setProperty("pli.cache.cleanup.threshold.mb", "1600");
+        } else if (maxMemoryMB >= 4096) { // 4GB+
+            System.setProperty("pli.cache.max.memory.mb", "1024");
+            System.setProperty("pli.cache.cleanup.threshold.mb", "800");
+        } else if (maxMemoryMB >= 2048) { // 2GB+
+            System.setProperty("pli.cache.max.memory.mb", "512");
+            System.setProperty("pli.cache.cleanup.threshold.mb", "400");
+        } else { // <2GB
+            System.setProperty("pli.cache.max.memory.mb", "256");
+            System.setProperty("pli.cache.cleanup.threshold.mb", "200");
+        }
+
+        // 配置内存监控参数
+        System.setProperty("memory.monitor.warning.threshold", "0.7");
+        System.setProperty("memory.monitor.critical.threshold", "0.85");
+
+        logger.info("内存优化配置完成，最大堆内存: {}MB", maxMemoryMB);
     }
     
     /**
@@ -484,144 +507,5 @@ public class ExperimentRunner {
         }
     }
     
-    /**
-     * 获取指定目录下所有文件的路径，按CSV文件的列数从少到多排序
-     * @param directoryPath 目录路径
-     * @return 文件路径列表（按列数排序）
-     * @throws IOException 如果读取目录失败
-     */
-    private static List<String> getDatasetPaths(String directoryPath) throws IOException {
-        File directory = new File(directoryPath);
-        if (!directory.exists() || !directory.isDirectory()) {
-            throw new IOException("路径不存在或不是一个目录: " + directoryPath);
-        }
-        
-        try (Stream<Path> paths = Files.walk(Paths.get(directoryPath), 1)) {
-            List<File> files = paths
-                    .filter(Files::isRegularFile)
-                    .map(Path::toFile)
-                    .collect(Collectors.toList());
-            
-            // 按CSV列数从少到多排序
-            return files.stream()
-                    .sorted((file1, file2) -> {
-                        try {
-                            int columns1 = getColumnCount(file1.getPath());
-                            int columns2 = getColumnCount(file2.getPath());
-                            return Integer.compare(columns1, columns2);
-                        } catch (IOException e) {
-                            System.err.println("排序文件时出错: " + e.getMessage());
-                            return 0; // 出错时保持原有顺序
-                        }
-                    })
-                    .map(File::getPath)
-                    .collect(Collectors.toList());
-        }
-    }
 
-    /**
-     * 执行内存预检查，评估数据集规模和可用内存
-     */
-    private static void performMemoryPreCheck(List<String> datasetPaths) {
-        Runtime runtime = Runtime.getRuntime();
-        long maxMemoryMB = runtime.maxMemory() / (1024 * 1024);
-        long availableMemoryMB = (runtime.maxMemory() - runtime.totalMemory() + runtime.freeMemory()) / (1024 * 1024);
-
-        System.out.println("\n============================================================");
-        System.out.println("内存预检查");
-        System.out.println("============================================================");
-        System.out.println("JVM最大堆内存: " + maxMemoryMB + "MB");
-        System.out.println("当前可用内存: " + availableMemoryMB + "MB");
-
-        // 分析数据集规模
-        long totalDataPoints = 0;
-        int largeDatasetCount = 0;
-        int hugeDatasetCount = 0;
-
-        for (String path : datasetPaths) {
-            try {
-                int columns = getColumnCount(path);
-                int rows = getRowCount(path);
-                long datasetSize = (long) columns * rows;
-                totalDataPoints += datasetSize;
-
-                if (datasetSize > 50_000_000) { // 5000万数据点
-                    hugeDatasetCount++;
-                    System.out.println("超大数据集: " + path + " (" + columns + "×" + rows + " = " + datasetSize + " 数据点)");
-                } else if (datasetSize > 10_000_000) { // 1000万数据点
-                    largeDatasetCount++;
-                    System.out.println("大数据集: " + path + " (" + columns + "×" + rows + " = " + datasetSize + " 数据点)");
-                }
-            } catch (Exception e) {
-                System.err.println("无法分析数据集: " + path + " - " + e.getMessage());
-            }
-        }
-
-        System.out.println("总数据点: " + totalDataPoints);
-        System.out.println("大数据集数量: " + largeDatasetCount);
-        System.out.println("超大数据集数量: " + hugeDatasetCount);
-
-        // 内存建议
-        if (hugeDatasetCount > 0 && maxMemoryMB < 8192) {
-            System.out.println("\n⚠️  警告: 检测到超大数据集，建议增加堆内存到至少8GB");
-            System.out.println("   建议JVM参数: -Xmx8g 或更大");
-        } else if (largeDatasetCount > 0 && maxMemoryMB < 4096) {
-            System.out.println("\n⚠️  警告: 检测到大数据集，建议增加堆内存到至少4GB");
-            System.out.println("   建议JVM参数: -Xmx4g");
-        } else if (totalDataPoints > 100_000_000 && maxMemoryMB < 2048) {
-            System.out.println("\n⚠️  警告: 数据集总规模较大，建议增加堆内存到至少2GB");
-            System.out.println("   建议JVM参数: -Xmx2g");
-        } else {
-            System.out.println("\n✅ 内存配置看起来合适");
-        }
-
-        System.out.println("============================================================\n");
-    }
-
-    /**
-     * 配置内存优化参数
-     */
-    private static void configureMemoryOptimization() {
-        Runtime runtime = Runtime.getRuntime();
-        long maxMemoryMB = runtime.maxMemory() / (1024 * 1024);
-
-        // 根据可用内存动态配置PLI缓存限制
-        if (maxMemoryMB >= 8192) { // 8GB+
-            System.setProperty("pli.cache.max.memory.mb", "2048");
-            System.setProperty("pli.cache.cleanup.threshold.mb", "1600");
-        } else if (maxMemoryMB >= 4096) { // 4GB+
-            System.setProperty("pli.cache.max.memory.mb", "1024");
-            System.setProperty("pli.cache.cleanup.threshold.mb", "800");
-        } else if (maxMemoryMB >= 2048) { // 2GB+
-            System.setProperty("pli.cache.max.memory.mb", "512");
-            System.setProperty("pli.cache.cleanup.threshold.mb", "400");
-        } else { // <2GB
-            System.setProperty("pli.cache.max.memory.mb", "256");
-            System.setProperty("pli.cache.cleanup.threshold.mb", "200");
-            System.setProperty("pli.force.streaming", "true"); // 强制使用流式处理
-        }
-
-        // 配置内存监控参数
-        System.setProperty("memory.monitor.warning.threshold", "0.7");
-        System.setProperty("memory.monitor.critical.threshold", "0.85");
-
-        logger.info("内存优化配置完成，最大堆内存: {}MB", maxMemoryMB);
-    }
-
-    /**
-     * 根据数据集大小计算合适的超时时间
-     */
-    private static long calculateTimeoutForDataset(long datasetSize) {
-        if (datasetSize > 100_000_000) { // 1亿数据点
-            return Math.max(ALGORITHM_TIMEOUT_MINUTES, 240); // 至少4小时
-        } else if (datasetSize > 50_000_000) { // 5000万数据点
-            return Math.max(ALGORITHM_TIMEOUT_MINUTES, 180); // 至少3小时
-        } else if (datasetSize > 10_000_000) { // 1000万数据点
-            return Math.max(ALGORITHM_TIMEOUT_MINUTES, 120); // 至少2小时
-        } else if (datasetSize > 1_000_000) { // 100万数据点
-            return Math.max(ALGORITHM_TIMEOUT_MINUTES, 60); // 至少1小时
-        } else {
-            return ALGORITHM_TIMEOUT_MINUTES; // 使用默认超时时间
-        }
-    }
 }

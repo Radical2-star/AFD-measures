@@ -3,17 +3,18 @@ package sampling;
 import model.DataSet;
 import pli.PLI;
 import pli.PLICache;
+import utils.LongBitSetUtils;
 
 import java.util.*;
-import java.util.stream.Collectors;
 import java.util.function.Function;
 
 /**
  * NeymanSampling - 基于Neyman最优分配的聚焦采样策略
  * 通过两阶段采样方法，先进行试点采样估计方差，再按Neyman公式分配样本
+ * 支持BitSet和long两种位集合表示，long版本性能更优
  *
  * @author Hoshi
- * @version 1.0
+ * @version 2.0
  * @since 2025/6/16
  */
 public class NeymanSampling implements SamplingStrategy {
@@ -72,60 +73,175 @@ public class NeymanSampling implements SamplingStrategy {
     }
     
     /**
-     * 执行试点采样（内部方法）
+     * 执行试点采样（内部方法）- 优化版本，减少集合转换和对象创建
      */
     private Set<Integer> performPilotSampling(Set<Integer> cluster) {
-        Set<Integer> pilotSample = new HashSet<>();
-        
         // 计算试点样本数量：min(sqrt(簇大小), MAX_PILOT_SAMPLE_SIZE)
         int pilotSize = Math.min(MAX_PILOT_SAMPLE_SIZE, (int) Math.sqrt(cluster.size()));
         
         // 如果试点样本数量大于等于簇大小，全部采样
         if (pilotSize >= cluster.size()) {
-            pilotSample.addAll(cluster);
-        } else {
-            // 随机采样
-            List<Integer> clusterRows = new ArrayList<>(cluster);
-            for (int i = 0; i < pilotSize; i++) {
-                int randomIndex = random.nextInt(clusterRows.size());
-                pilotSample.add(clusterRows.remove(randomIndex));
-            }
+            return new HashSet<>(cluster);
+        }
+        
+        // 优化的随机采样：避免频繁的remove操作
+        Set<Integer> pilotSample = new HashSet<>(pilotSize);
+        Integer[] clusterArray = cluster.toArray(new Integer[0]);
+        
+        // 使用Fisher-Yates洗牌算法的简化版本
+        for (int i = 0; i < pilotSize; i++) {
+            int randomIndex = random.nextInt(clusterArray.length - i);
+            pilotSample.add(clusterArray[randomIndex]);
+            // 将选中的元素交换到末尾，避免重复选择
+            Integer temp = clusterArray[randomIndex];
+            clusterArray[randomIndex] = clusterArray[clusterArray.length - 1 - i];
+            clusterArray[clusterArray.length - 1 - i] = temp;
         }
         
         return pilotSample;
     }
     
     /**
-     * 计算簇内方差（内部方法）
+     * 计算簇内方差（内部方法）- 优化版本，避免Stream API开销
      */
     private double calculateClusterVariance(Set<Integer> pilotSample, DataSet data, int rhs) {
         if (pilotSample.size() <= 1) {
             return 0.0;
         }
         
-        // 1. 找到试点样本中的主流RHS值
-        String majorityValue = pilotSample.stream()
-                .map(row -> data.getValue(row, rhs))
-                .collect(Collectors.groupingBy(val -> val, Collectors.counting()))
-                .entrySet().stream()
-                .max(Map.Entry.comparingByValue())
-                .map(Map.Entry::getKey)
-                .orElse("");
-
-        // 2. 计算冲突指示变量 (1表示冲突, 0表示不冲突)
-        List<Integer> indicators = new ArrayList<>();
+        // 1. 高效查找主流RHS值 - 用手动实现替代Stream API
+        Map<String, Integer> valueCount = new HashMap<>();
+        String majorityValue = "";
+        int maxCount = 0;
+        
         for (int row : pilotSample) {
-            indicators.add(data.getValue(row, rhs).equals(majorityValue) ? 0 : 1);
+            String value = data.getValue(row, rhs);
+            int count = valueCount.getOrDefault(value, 0) + 1;
+            valueCount.put(value, count);
+            
+            if (count > maxCount) {
+                maxCount = count;
+                majorityValue = value;
+            }
         }
 
-        // 3. 计算这些指示变量的样本方差 s^2 = (1/(n-1)) * sum((x_i - mean)^2)
-        double mean = indicators.stream().mapToInt(Integer::intValue).average().orElse(0.0);
-
-        return indicators.stream()
-                .mapToDouble(i -> (i - mean) * (i - mean))
-                .sum() / (indicators.size() - 1);
+        // 2. 直接计算方差，避免创建中间列表
+        double sum = 0.0;
+        double sumSquares = 0.0;
+        int sampleSize = pilotSample.size();
+        
+        for (int row : pilotSample) {
+            int indicator = data.getValue(row, rhs).equals(majorityValue) ? 0 : 1;
+            sum += indicator;
+            sumSquares += indicator * indicator;
+        }
+        
+        // 3. 使用数学公式直接计算样本方差: s^2 = (sumSquares - n*mean^2) / (n-1)
+        double mean = sum / sampleSize;
+        return (sumSquares - sampleSize * mean * mean) / (sampleSize - 1);
     }
 
+    // ==================== 新的long版本方法（性能优化） ====================
+
+    /**
+     * 初始化Neyman最优采样策略（long版本，性能更优）
+     * 通过两阶段采样方法，先进行试点采样估计方差，再按Neyman公式分配样本
+     *
+     * @param data 原始数据集
+     * @param cache PLI缓存
+     * @param lhs 左手边属性集（long表示，支持最多64列）
+     * @param rhs 右手边属性
+     * @param sampleParam 采样参数（可以是比例或固定数量）
+     */
+    public void initialize(DataSet data, PLICache cache, long lhs, int rhs, double sampleParam) {
+        int totalRows = data.getRowCount();
+
+        // 计算理论样本总数
+        if (sampleParam < 1) {
+            // 按比例采样
+            sampleSize = (int) (totalRows * sampleParam);
+            samplingInfo = "比例: " + sampleParam;
+        } else {
+            // 按固定数量采样
+            sampleSize = (int) Math.min(sampleParam, totalRows);
+            samplingInfo = "数量: " + sampleSize;
+        }
+
+        // 如果LHS为空或样本数为0，返回空集
+        if (LongBitSetUtils.isEmpty(lhs) || sampleSize == 0) {
+            sampleIndices = Collections.emptySet();
+            return;
+        }
+
+        // 优化：选择LHS中size最小的单列PLI进行采样
+        PLI selectedPli = selectMinimalSizePliLong(lhs, cache, rhs);
+
+        // 执行优化后的两阶段采样
+        sampleIndices = optimizedTwoPhaseNeymanSampling(selectedPli, data, rhs, sampleSize);
+    }
+
+    /**
+     * 选择LHS中size最小的单列PLI（long版本）
+     * @param lhs 左手边属性集合（long表示）
+     * @param cache PLI缓存
+     * @param rhs 右手边属性索引
+     * @return size最小的单列PLI
+     */
+    private PLI selectMinimalSizePliLong(long lhs, PLICache cache, int rhs) {
+        PLI minPli = null;
+        int minSize = Integer.MAX_VALUE;
+
+        try {
+            // 使用传统for循环遍历lhs中的每一位
+            for (int col = 0; col < 64; col++) {
+                // 检查该位是否被设置
+                if (!LongBitSetUtils.testBit(lhs, col)) continue;
+                // 跳过RHS列
+                if (col == rhs) continue;
+
+                try {
+                    // 获取单列PLI
+                    List<Integer> key = new ArrayList<>();
+                    key.add(col);
+                    PLI pli = cache.get(key);
+
+                    // 找到size更小的PLI
+                    if (pli != null && pli.size() < minSize) {
+                        minSize = pli.size();
+                        minPli = pli;
+                    }
+                } catch (Exception e) {
+                    // 单列PLI获取失败，跳过这一列
+                    continue;
+                }
+            }
+        } catch (Exception e) {
+            // 整个过程失败，回退到原始方法
+            BitSet lhsBitSet = LongBitSetUtils.longToBitSet(lhs, 64);
+            return cache.findBestCachedSubsetPli(lhsBitSet);
+        }
+
+        // 如果没有找到合适的单列PLI，回退到原始方法
+        if (minPli == null) {
+            BitSet lhsBitSet = LongBitSetUtils.longToBitSet(lhs, 64);
+            return cache.findBestCachedSubsetPli(lhsBitSet);
+        }
+
+        return minPli;
+    }
+
+    // ==================== 原有BitSet版本方法（兼容性） ====================
+
+    /**
+     * 初始化Neyman最优采样策略（BitSet版本，兼容性方法）
+     * 通过两阶段采样方法，先进行试点采样估计方差，再按Neyman公式分配样本
+     *
+     * @param data 原始数据集
+     * @param cache PLI缓存
+     * @param lhs 左手边属性集
+     * @param rhs 右手边属性
+     * @param sampleParam 采样参数（可以是比例或固定数量）
+     */
     @Override
     public void initialize(DataSet data, PLICache cache, BitSet lhs, int rhs, double sampleParam) {
         int totalRows = data.getRowCount();
@@ -251,11 +367,17 @@ public class NeymanSampling implements SamplingStrategy {
                 continue;
             }
             
-            // 随机采样
-            List<Integer> clusterRows = new ArrayList<>(cluster);
+            // 优化的随机采样：避免频繁的remove操作
+            Integer[] clusterArray = cluster.toArray(new Integer[0]);
+            
+            // 使用Fisher-Yates洗牌算法的简化版本
             for (int j = 0; j < allocation; j++) {
-                int randomIndex = random.nextInt(clusterRows.size());
-                result.add(clusterRows.remove(randomIndex));
+                int randomIndex = random.nextInt(clusterArray.length - j);
+                result.add(clusterArray[randomIndex]);
+                // 将选中的元素交换到末尾，避免重复选择
+                Integer temp = clusterArray[randomIndex];
+                clusterArray[randomIndex] = clusterArray[clusterArray.length - 1 - j];
+                clusterArray[clusterArray.length - 1 - j] = temp;
             }
         }
         
@@ -327,14 +449,19 @@ public class NeymanSampling implements SamplingStrategy {
             return result;
         }
         
-        // 步骤1：进行试点采样，估计各簇的方差
-        Map<Integer, Double> clusterVariances = new HashMap<>();
-        Map<Integer, Set<Integer>> pilotSamples = pilotSample(clusters);
+        // 步骤1：尝试使用缓存的方差信息，如果没有则进行试点采样
+        Map<Integer, Double> clusterVariances = getCachedVariances(pli, data, rhs);
         
-        // 步骤2：估计各簇的方差
-        for (int i = 0; i < clusters.size(); i++) {
-            double variance = estimateVariance(pilotSamples.get(i), data, rhs);
-            clusterVariances.put(i, variance);
+        if (clusterVariances == null) {
+            // 缓存未命中，进行试点采样，估计各簇的方差
+            clusterVariances = new HashMap<>();
+            Map<Integer, Set<Integer>> pilotSamples = pilotSample(clusters);
+            
+            // 步骤2：估计各簇的方差
+            for (int i = 0; i < clusters.size(); i++) {
+                double variance = estimateVariance(pilotSamples.get(i), data, rhs);
+                clusterVariances.put(i, variance);
+            }
         }
         
         // 步骤3：计算Neyman最优分配
@@ -352,11 +479,17 @@ public class NeymanSampling implements SamplingStrategy {
                 continue;
             }
             
-            // 随机采样
-            List<Integer> clusterRows = new ArrayList<>(cluster);
+            // 优化的随机采样：避免频繁的remove操作
+            Integer[] clusterArray = cluster.toArray(new Integer[0]);
+            
+            // 使用Fisher-Yates洗牌算法的简化版本
             for (int j = 0; j < allocation; j++) {
-                int randomIndex = random.nextInt(clusterRows.size());
-                result.add(clusterRows.remove(randomIndex));
+                int randomIndex = random.nextInt(clusterArray.length - j);
+                result.add(clusterArray[randomIndex]);
+                // 将选中的元素交换到末尾，避免重复选择
+                Integer temp = clusterArray[randomIndex];
+                clusterArray[randomIndex] = clusterArray[clusterArray.length - 1 - j];
+                clusterArray[clusterArray.length - 1 - j] = temp;
             }
         }
         
@@ -385,11 +518,17 @@ public class NeymanSampling implements SamplingStrategy {
             if (pilotSize >= cluster.size()) {
                 pilotSample.addAll(cluster);
             } else {
-                // 随机采样
-                List<Integer> clusterRows = new ArrayList<>(cluster);
+                // 优化的随机采样：避免频繁的remove操作
+                Integer[] clusterArray = cluster.toArray(new Integer[0]);
+                
+                // 使用Fisher-Yates洗牌算法的简化版本
                 for (int j = 0; j < pilotSize; j++) {
-                    int randomIndex = random.nextInt(clusterRows.size());
-                    pilotSample.add(clusterRows.remove(randomIndex));
+                    int randomIndex = random.nextInt(clusterArray.length - j);
+                    pilotSample.add(clusterArray[randomIndex]);
+                    // 将选中的元素交换到末尾，避免重复选择
+                    Integer temp = clusterArray[randomIndex];
+                    clusterArray[randomIndex] = clusterArray[clusterArray.length - 1 - j];
+                    clusterArray[clusterArray.length - 1 - j] = temp;
                 }
             }
             
@@ -400,7 +539,7 @@ public class NeymanSampling implements SamplingStrategy {
     }
     
     /**
-     * 估计簇内方差 (使用指标：冲突指示变量的样本方差)
+     * 估计簇内方差 (使用指标：冲突指示变量的样本方差) - 优化版本
      * @param pilotSample 试点样本
      * @param data 数据集对象
      * @param rhs 右手边属性索引
@@ -411,27 +550,36 @@ public class NeymanSampling implements SamplingStrategy {
             return 0.0; // 单个或没有样本，方差为0
         }
         
-        // 1. 找到试点样本中的主流RHS值
-        String majorityValue = pilotSample.stream()
-                .map(row -> data.getValue(row, rhs))
-                .collect(Collectors.groupingBy(val -> val, Collectors.counting()))
-                .entrySet().stream()
-                .max(Map.Entry.comparingByValue())
-                .map(Map.Entry::getKey)
-                .orElse("");
-
-        // 2. 计算冲突指示变量 (1表示冲突, 0表示不冲突)
-        List<Integer> indicators = new ArrayList<>();
+        // 1. 高效查找主流RHS值 - 用手动实现替代Stream API
+        Map<String, Integer> valueCount = new HashMap<>();
+        String majorityValue = "";
+        int maxCount = 0;
+        
         for (int row : pilotSample) {
-            indicators.add(data.getValue(row, rhs).equals(majorityValue) ? 0 : 1);
+            String value = data.getValue(row, rhs);
+            int count = valueCount.getOrDefault(value, 0) + 1;
+            valueCount.put(value, count);
+            
+            if (count > maxCount) {
+                maxCount = count;
+                majorityValue = value;
+            }
         }
 
-        // 3. 计算这些指示变量的样本方差 s^2 = (1/(n-1)) * sum((x_i - mean)^2)
-        double mean = indicators.stream().mapToInt(Integer::intValue).average().orElse(0.0);
-
-        return indicators.stream()
-                .mapToDouble(i -> (i - mean) * (i - mean))
-                .sum() / (indicators.size() - 1);
+        // 2. 直接计算方差，避免创建中间列表
+        double sum = 0.0;
+        double sumSquares = 0.0;
+        int sampleSize = pilotSample.size();
+        
+        for (int row : pilotSample) {
+            int indicator = data.getValue(row, rhs).equals(majorityValue) ? 0 : 1;
+            sum += indicator;
+            sumSquares += indicator * indicator;
+        }
+        
+        // 3. 使用数学公式直接计算样本方差: s^2 = (sumSquares - n*mean^2) / (n-1)
+        double mean = sum / sampleSize;
+        return (sumSquares - sampleSize * mean * mean) / (sampleSize - 1);
     }
     
     /**

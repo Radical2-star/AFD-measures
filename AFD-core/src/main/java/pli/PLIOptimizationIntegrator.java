@@ -54,25 +54,71 @@ public class PLIOptimizationIntegrator {
         this.optimizedCache = new OptimizedPLICache(dataset);
         this.memoryMonitor = MemoryMonitor.getInstance();
         
-        // 启动内存监控
-        memoryMonitor.startMonitoring(10000, alert -> {
-            if (alert.getLevel() == MemoryMonitor.AlertLevel.CRITICAL) {
-                logger.warn("检测到内存压力，切换到内存优化策略");
-                switchToMemoryOptimizedStrategy();
-            }
-        });
+        // 启动内存监控（仅在非强制原始模式下）
+        if (!isForceOriginalOnly()) {
+            memoryMonitor.startMonitoring(10000, alert -> {
+                if (alert.getLevel() == MemoryMonitor.AlertLevel.CRITICAL) {
+                    logger.warn("检测到内存压力，切换到内存优化策略");
+                    switchToMemoryOptimizedStrategy();
+                }
+            });
+        }
         
         // 初始策略选择
         this.currentStrategy = selectInitialStrategy();
         
-        logger.info("PLI优化集成器初始化完成，数据集: {}行×{}列, 初始策略: {}", 
-                   dataset.getRowCount(), dataset.getColumnCount(), currentStrategy);
+        logger.info("PLI优化集成器初始化完成，数据集: {}行×{}列, 初始策略: {}, 强制原始模式: {}", 
+                   dataset.getRowCount(), dataset.getColumnCount(), currentStrategy, isForceOriginalOnly());
+    }
+    
+    /**
+     * 检查是否强制使用原始PLI实现
+     */
+    private boolean isForceOriginalOnly() {
+        return Boolean.parseBoolean(System.getProperty("pli.force.original.only", "false"));
+    }
+    
+    /**
+     * 检查是否禁用优化
+     */
+    private boolean isOptimizationDisabled() {
+        return Boolean.parseBoolean(System.getProperty("pli.disable.optimization", "false"));
+    }
+    
+    /**
+     * 检查是否禁用动态切换
+     */
+    private boolean isDynamicSwitchingDisabled() {
+        return Boolean.parseBoolean(System.getProperty("pli.disable.dynamic.switching", "false"));
+    }
+    
+    /**
+     * 检查是否启用优化集成器
+     */
+    private boolean isOptimizationIntegratorEnabled() {
+        return Boolean.parseBoolean(System.getProperty("pli.enable.optimization.integrator", "false"));
     }
     
     /**
      * 选择初始策略
      */
     private PLIStrategy selectInitialStrategy() {
+        // 首先检查系统属性配置
+        if (isForceOriginalOnly()) {
+            logger.info("系统配置强制使用原始PLI实现");
+            return PLIStrategy.ORIGINAL;
+        }
+        
+        if (isOptimizationDisabled()) {
+            logger.info("系统配置禁用PLI优化，使用原始实现");
+            return PLIStrategy.ORIGINAL;
+        }
+        
+        // 如果明确启用了优化集成器，使用动态策略
+        if (isOptimizationIntegratorEnabled()) {
+            logger.info("系统配置启用优化集成器，使用动态策略选择");
+        }
+        
         long rowCount = dataset.getRowCount();
         int columnCount = dataset.getColumnCount();
         long availableMemoryMB = getAvailableMemoryMB();
@@ -179,6 +225,12 @@ public class PLIOptimizationIntegrator {
      * 切换到内存优化策略
      */
     private void switchToMemoryOptimizedStrategy() {
+        // 如果禁用动态切换或强制使用原始实现，则不进行策略切换
+        if (isDynamicSwitchingDisabled() || isForceOriginalOnly()) {
+            logger.info("策略切换被禁用，保持当前策略: {}", currentStrategy);
+            return;
+        }
+        
         if (currentStrategy != PLIStrategy.STREAMING) {
             logger.info("策略切换: {} -> {}", currentStrategy, PLIStrategy.STREAMING);
             currentStrategy = PLIStrategy.STREAMING;
@@ -204,14 +256,15 @@ public class PLIOptimizationIntegrator {
         
         return String.format(
             "PLI性能统计 - 总请求: %d, 原始: %d(%.1f%%), 优化: %d(%.1f%%), 流式: %d(%.1f%%), " +
-            "当前策略: %s, 内存使用: %dMB/%.1f%%",
+            "当前策略: %s, 内存使用: %dMB/%.1f%%, 配置: [强制原始:%s, 禁用优化:%s, 禁用切换:%s]",
             total,
             original, total > 0 ? (double) original / total * 100 : 0,
             optimized, total > 0 ? (double) optimized / total * 100 : 0,
             streaming, total > 0 ? (double) streaming / total * 100 : 0,
             currentStrategy,
             snapshot.getUsedHeapMemory() / (1024 * 1024),
-            snapshot.getUsageRatio() * 100
+            snapshot.getUsageRatio() * 100,
+            isForceOriginalOnly(), isOptimizationDisabled(), isDynamicSwitchingDisabled()
         );
     }
     
@@ -273,16 +326,33 @@ public class PLIOptimizationIntegrator {
     }
     
     /**
+     * 获取当前配置状态
+     */
+    public String getConfigurationStatus() {
+        return String.format(
+            "PLI配置状态 - 强制原始模式: %s, 禁用优化: %s, 禁用动态切换: %s, 启用集成器: %s, 当前策略: %s",
+            isForceOriginalOnly(),
+            isOptimizationDisabled(),
+            isDynamicSwitchingDisabled(),
+            isOptimizationIntegratorEnabled(),
+            currentStrategy
+        );
+    }
+    
+    /**
      * 关闭集成器，释放资源
      */
     public void shutdown() {
         logger.info("关闭PLI优化集成器");
         
         // 停止内存监控
-        memoryMonitor.stopMonitoring();
+        if (!isForceOriginalOnly()) {
+            memoryMonitor.stopMonitoring();
+        }
         
         // 输出最终统计
         logger.info("最终统计: {}", getPerformanceStats());
+        logger.info("配置状态: {}", getConfigurationStatus());
     }
     
     /**

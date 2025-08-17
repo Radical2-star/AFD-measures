@@ -47,6 +47,40 @@ public class PLICacheTest {
     }
 
     @Test
+    void testLRUCacheStatistics() {
+        PLICache cache = new PLICache(testDataSet);
+        
+        // 测试缓存统计初始状态
+        String initialStats = cache.getCacheStats();
+        assertNotNull(initialStats);
+        assertTrue(initialStats.contains("PLI缓存统计"));
+        System.out.println("初始缓存统计: " + initialStats);
+        
+        // 访问一些已存在的单列PLI（应该增加命中计数）
+        BitSet col0 = new BitSet();
+        col0.set(0);
+        cache.getOrCalculatePLI(col0);
+        
+        BitSet col1 = new BitSet();
+        col1.set(1);
+        cache.getOrCalculatePLI(col1);
+        
+        // 访问一个不存在的多列组合（会触发计算和可能的缓存）
+        BitSet cols01 = new BitSet();
+        cols01.set(0);
+        cols01.set(1);
+        cache.getOrCalculatePLI(cols01);
+        
+        String finalStats = cache.getCacheStats();
+        System.out.println("最终缓存统计: " + finalStats);
+        
+        // 验证统计信息包含预期内容
+        assertTrue(finalStats.contains("访问:"));
+        assertTrue(finalStats.contains("命中:"));
+        assertTrue(finalStats.contains("命中率:"));
+    }
+    
+    @Test
     void testIntersectionWithResult() {
         PLICache cache = new PLICache(testDataSet);
 

@@ -2,6 +2,8 @@ package utils;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.IntConsumer;
+import java.util.stream.IntStream;
 
 /**
  * 基于long的高性能位集合工具类
@@ -303,5 +305,168 @@ public class LongBitSetUtils {
         if (parentsCache.size() > MAX_CACHE_SIZE) {
             parentsCache.clear();
         }
+    }
+
+    // ==================== 新增方法：BitSet兼容性和增强功能 ====================
+
+    /**
+     * 将long位集合转换为BitSet
+     * @param bits long表示的位集合
+     * @param columnCount 列数，用于边界检查
+     * @return 对应的BitSet
+     */
+    public static java.util.BitSet longToBitSet(long bits, int columnCount) {
+        validateColumnCount(columnCount);
+        operationCount++;
+
+        java.util.BitSet bitSet = new java.util.BitSet(columnCount);
+        for (int i = 0; i < columnCount; i++) {
+            if ((bits & (1L << i)) != 0) {
+                bitSet.set(i);
+            }
+        }
+        return bitSet;
+    }
+
+    /**
+     * 将BitSet转换为long位集合
+     * @param bitSet BitSet对象
+     * @param columnCount 列数，用于边界检查
+     * @return 对应的long值
+     */
+    public static long bitSetToLong(java.util.BitSet bitSet, int columnCount) {
+        validateColumnCount(columnCount);
+        operationCount++;
+
+        long result = 0L;
+        for (int i = bitSet.nextSetBit(0); i >= 0 && i < columnCount; i = bitSet.nextSetBit(i + 1)) {
+            result |= (1L << i);
+        }
+        return result;
+    }
+
+    /**
+     * 创建包含指定位的long位集合
+     * @param bitIndices 要设置的位索引数组
+     * @return 对应的long值
+     */
+    public static long createFromBits(int... bitIndices) {
+        operationCount++;
+        long result = 0L;
+        for (int bit : bitIndices) {
+            if (bit >= 64 || bit < 0) {
+                throw new IllegalArgumentException("位索引必须在0-63范围内: " + bit);
+            }
+            result |= (1L << bit);
+        }
+        return result;
+    }
+
+    /**
+     * 获取位集合的IntStream，用于遍历所有设置的位
+     * @param bits long表示的位集合
+     * @return 包含所有设置位索引的IntStream
+     */
+    public static IntStream stream(long bits) {
+        operationCount++;
+        return longToList(bits).stream().mapToInt(Integer::intValue);
+    }
+
+    /**
+     * 对位集合中的每个设置位执行指定操作
+     * @param bits long表示的位集合
+     * @param action 要执行的操作
+     */
+    public static void forEach(long bits, IntConsumer action) {
+        operationCount++;
+        for (int i = 0; i < 64; i++) {
+            if ((bits & (1L << i)) != 0) {
+                action.accept(i);
+            }
+        }
+    }
+
+    /**
+     * 克隆位集合（对于long来说就是返回原值）
+     * @param bits 要克隆的位集合
+     * @return 克隆的结果（等于原值）
+     */
+    public static long clone(long bits) {
+        operationCount++;
+        return bits; // long是值类型，直接返回即可
+    }
+
+    /**
+     * 翻转位集合（在指定列数范围内）
+     * @param bits 原位集合
+     * @param columnCount 列数
+     * @return 翻转后的位集合
+     */
+    public static long flip(long bits, int columnCount) {
+        validateColumnCount(columnCount);
+        operationCount++;
+        return complement(bits, columnCount);
+    }
+
+    /**
+     * 验证列数是否在有效范围内
+     * @param columnCount 列数
+     * @throws IllegalArgumentException 如果列数超出范围
+     */
+    public static void validateColumnCount(int columnCount) {
+        if (columnCount < 0) {
+            throw new IllegalArgumentException("列数不能为负数: " + columnCount);
+        }
+        if (columnCount > 64) {
+            throw new IllegalArgumentException("列数不能超过64: " + columnCount +
+                                             "。如需支持更多列，请使用BitSet版本。");
+        }
+    }
+
+    /**
+     * 验证位索引是否在有效范围内
+     * @param bitIndex 位索引
+     * @throws IllegalArgumentException 如果位索引超出范围
+     */
+    public static void validateBitIndex(int bitIndex) {
+        if (bitIndex < 0) {
+            throw new IllegalArgumentException("位索引不能为负数: " + bitIndex);
+        }
+        if (bitIndex >= 64) {
+            throw new IllegalArgumentException("位索引不能超过63: " + bitIndex);
+        }
+    }
+
+    /**
+     * 安全的设置位操作，包含边界检查
+     * @param bits 原位集合
+     * @param bitIndex 要设置的位索引
+     * @return 设置位后的结果
+     */
+    public static long setBitSafe(long bits, int bitIndex) {
+        validateBitIndex(bitIndex);
+        return setBit(bits, bitIndex);
+    }
+
+    /**
+     * 安全的清除位操作，包含边界检查
+     * @param bits 原位集合
+     * @param bitIndex 要清除的位索引
+     * @return 清除位后的结果
+     */
+    public static long clearBitSafe(long bits, int bitIndex) {
+        validateBitIndex(bitIndex);
+        return clearBit(bits, bitIndex);
+    }
+
+    /**
+     * 安全的测试位操作，包含边界检查
+     * @param bits 位集合
+     * @param bitIndex 要测试的位索引
+     * @return 该位是否被设置
+     */
+    public static boolean testBitSafe(long bits, int bitIndex) {
+        validateBitIndex(bitIndex);
+        return testBit(bits, bitIndex);
     }
 }

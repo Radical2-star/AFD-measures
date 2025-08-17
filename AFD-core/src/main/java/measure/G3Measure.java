@@ -5,6 +5,7 @@ import pli.PLI;
 import pli.PLICache;
 import sampling.SamplingStrategy;
 import utils.BitSetUtils;
+import utils.LongBitSetUtils;
 
 import java.util.ArrayList;
 import java.util.BitSet;
@@ -15,13 +16,226 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- *  G3Measure
- * 
+ * G3Measure - 基于"删除元组数"的误差度量实现
+ * 支持BitSet和long两种位集合表示，long版本性能更优
+ *
  * @author Hoshi
- * @version 1.0
+ * @version 2.0
  * @since 2025/2/26
  */
 public class G3Measure implements ErrorMeasure {
+    
+    // 性能优化：缓存RHS PLI查询结果，避免重复转换和查询
+    private PLI cachedRhsPLI = null;
+    private int cachedRhsColumn = -1;
+    private int[] cachedRhsAttributeVector = null;
+    
+    // 性能优化：重用HashMap对象，减少GC压力
+    private final Map<Integer, Integer> reusableFreqCounter = new HashMap<>();
+
+    // ==================== 新的long版本方法（性能优化） ====================
+
+    /**
+     * 计算函数依赖的错误率（long版本，性能更优）
+     * 使用G3度量：基于删除元组数的误差计算
+     *
+     * @param lhs 左手边属性集（long表示，支持最多64列）
+     * @param rhs 右手边属性
+     * @param data 数据集
+     * @param cache PLI缓存
+     * @return G3错误率
+     */
+    public double calculateError(long lhs, int rhs, DataSet data, PLICache cache) {
+        // 1. 获取rhs对应的PLI（单列）及属性向量 - 使用缓存优化
+        int[] vY = getCachedRhsAttributeVector(rhs, data, cache);
+
+        // 2. 初始化总删除数和总行数
+        int totalRows = data.getRowCount();
+        if (totalRows <= 1) return 0.0; // 空表或单行表无需计算
+        int totalRemovals = 0;
+
+        // 处理根节点特殊情况
+        if (LongBitSetUtils.isEmpty(lhs)) {
+            PLI rhsPLI = getCachedRhsPLI(rhs, data, cache);
+            for (Set<Integer> cluster : rhsPLI.getEquivalenceClasses()) {
+                int clusterSize = cluster.size();
+                totalRemovals += clusterSize - 1;
+            }
+            return totalRemovals == 0 ? 0 : (double) totalRemovals / (totalRows - 1);
+        }
+
+        // 3. 获取lhs对应的PLI
+        BitSet lhsBitSet = LongBitSetUtils.longToBitSet(lhs, data.getColumnCount());
+        PLI lhsPLI = cache.getOrCalculatePLI(lhsBitSet);
+
+        // 4. 遍历lhs的每个等价类簇
+        for (Set<Integer> cluster : lhsPLI.getEquivalenceClasses()) {
+            int clusterSize = cluster.size();
+            
+            // 4.1 统计当前簇中rhs属性值的分布 - 使用重用的HashMap
+            reusableFreqCounter.clear();
+            for (int row : cluster) {
+                int yVal = vY[row];
+                if (yVal == 0) continue; // 去除单例
+                reusableFreqCounter.put(yVal, reusableFreqCounter.getOrDefault(yVal, 0) + 1);
+            }
+
+            // 4.2 找出出现次数最多的属性值 - 优化为手动查找
+            int maxCount = 0;
+            if (!reusableFreqCounter.isEmpty()) {
+                for (int count : reusableFreqCounter.values()) {
+                    if (count > maxCount) {
+                        maxCount = count;
+                    }
+                }
+            }
+
+            // 4.3 计算需要删除的元组数
+            if (maxCount == 0) {
+                // 情况1：所有元组在rhs都是单例 → 保留1个，删除(clusterSize-1)
+                totalRemovals += (clusterSize - 1);
+            } else {
+                // 情况2：保留出现最多的值对应的元组 → 删除(clusterSize - maxCount)
+                totalRemovals += (clusterSize - maxCount);
+            }
+        }
+
+        // 5. 计算最终误差率
+        return (double) totalRemovals / (totalRows - 1);
+    }
+
+    /**
+     * 估计函数依赖的错误率（long版本，性能更优）
+     * 使用采样策略进行G3度量的估计计算
+     *
+     * @param lhs 左手边属性集（long表示，支持最多64列）
+     * @param rhs 右手边属性
+     * @param data 数据集
+     * @param cache PLI缓存
+     * @param strategy 采样策略
+     * @return 估计的G3错误率
+     */
+    public double estimateError(long lhs, int rhs, DataSet data, PLICache cache, SamplingStrategy strategy) {
+        // 1. 使用采样策略获取样本行索引集合
+        if (strategy == null) {
+            return calculateError(lhs, rhs, data, cache);
+        }
+
+        Set<Integer> sampleRows = strategy.getSampleIndices();
+
+        // 如果样本为空，则无法进行估计，返回0.0
+        if (sampleRows == null || sampleRows.isEmpty()) {
+            return 0.0;
+        }
+
+        // LHS为空的特殊情况不需要处理，算法保证传入的LHS不为空
+        List<Integer> lhsColumnIndices = LongBitSetUtils.longToList(lhs);
+
+        // 2. 从PLICache中获取LHS各列基于完整数据集的属性向量
+        List<int[]> lhsAttributeVectors = new ArrayList<>(lhsColumnIndices.size());
+        for (int colIndex : lhsColumnIndices) {
+            long singleColLong = LongBitSetUtils.setBit(0L, colIndex);
+            BitSet singleColBitSet = LongBitSetUtils.longToBitSet(singleColLong, data.getColumnCount());
+            PLI singleColPli = cache.getOrCalculatePLI(singleColBitSet);
+            if (singleColPli == null) {
+                throw new IllegalStateException("无法为LHS列获取PLI: " + colIndex +
+                                                ". 请确保PLICache已正确初始化且数据一致.");
+            }
+            lhsAttributeVectors.add(singleColPli.toAttributeVector());
+        }
+
+        // 3. 从PLICache中获取RHS列基于完整数据集的属性向量
+        long rhsLong = LongBitSetUtils.setBit(0L, rhs);
+        BitSet rhsBitSet = LongBitSetUtils.longToBitSet(rhsLong, data.getColumnCount());
+        PLI rhsPli = cache.getOrCalculatePLI(rhsBitSet);
+        if (rhsPli == null) {
+            throw new IllegalStateException("无法为RHS列获取PLI: " + rhs +
+                                            ". 请确保PLICache已正确初始化且数据一致.");
+        }
+        int[] rhsVector = rhsPli.toAttributeVector();
+
+        // 4. 在样本行上构建LHS的等价类
+        Map<List<Integer>, Set<Integer>> lhsSampleEquivalenceClasses = new HashMap<>();
+        for (int rowIndex : sampleRows) {
+            List<Integer> currentLhsValues = new ArrayList<>(lhsColumnIndices.size());
+            boolean skipRowDueToLhsSingleton = false;
+
+            // 遍历LHS的每一列，获取当前行在这些列上的属性向量值
+            for (int[] attrVec : lhsAttributeVectors) {
+                int val = attrVec[rowIndex];
+                if (val == 0) { // 如果该行在LHS的任何一列上是全局单例
+                    skipRowDueToLhsSingleton = true;
+                    break;
+                }
+                currentLhsValues.add(val);
+            }
+
+            if (skipRowDueToLhsSingleton) {
+                continue; // 跳过此行，因为它在LHS上是全局单例
+            }
+
+            // 将行加入对应的LHS采样等价类中
+            lhsSampleEquivalenceClasses.computeIfAbsent(currentLhsValues, k -> new HashSet<>()).add(rowIndex);
+        }
+
+        // 5. 基于样本LHS等价类计算冲突数，模拟G3度量的逻辑
+        long sampleViolations = 0;
+        for (Set<Integer> sampledClusterRows : lhsSampleEquivalenceClasses.values()) {
+            int currentSampledLhsClusterSize = sampledClusterRows.size();
+
+            if (currentSampledLhsClusterSize <= 1) {
+                continue;
+            }
+
+            // 统计当前采样LHS等价类中，RHS各属性值的频率
+            Map<Integer, Integer> freqCounter = new HashMap<>();
+            for (int rowInCluster : sampledClusterRows) {
+                int yVal = rhsVector[rowInCluster];
+                if (yVal == 0) { // 如果RHS值是全局单例，则不参与频率计数
+                    continue;
+                }
+                freqCounter.put(yVal, freqCounter.getOrDefault(yVal, 0) + 1);
+            }
+
+            int maxFreqInSampledCluster = 0;
+            if (!freqCounter.isEmpty()) {
+                maxFreqInSampledCluster = freqCounter.values().stream().max(Integer::compare).orElse(0);
+            }
+
+            // 应用G3度量的移除逻辑
+            if (maxFreqInSampledCluster == 0) {
+                sampleViolations += (currentSampledLhsClusterSize - 1);
+            } else {
+                sampleViolations += (currentSampledLhsClusterSize - maxFreqInSampledCluster);
+            }
+        }
+
+        // 6. 根据采样率将样本冲突数放大，以估算完整数据集上的总冲突数
+        if (data.getRowCount() <= 1) {
+            return 0.0;
+        }
+
+        double sampleRate = (double) strategy.getSampleSize() / data.getRowCount();
+        if (sampleRate == 0) {
+            return 0.0;
+        }
+
+        double estimatedTotalViolations = sampleViolations / sampleRate;
+        return estimatedTotalViolations / (data.getRowCount() - 1);
+    }
+
+    // ==================== 原有BitSet版本方法（兼容性） ====================
+
+    /**
+     * 计算函数依赖的错误率（BitSet版本，兼容性方法）
+     * 使用G3度量：基于删除元组数的误差计算
+     *
+     * @param lhs 左手边属性集
+     * @param rhs 右手边属性
+     * @param data 数据集
+     * @param cache PLI缓存
+     * @return G3错误率
+     */
     @Override
     public double calculateError(BitSet lhs, int rhs, DataSet data, PLICache cache) {
         // 1. 获取rhs对应的PLI（单列）及属性向量
@@ -78,6 +292,17 @@ public class G3Measure implements ErrorMeasure {
         return (double) totalRemovals / (totalRows - 1);
     }
 
+    /**
+     * 估计函数依赖的错误率（BitSet版本，兼容性方法）
+     * 使用采样策略进行G3度量的估计计算
+     *
+     * @param lhs 左手边属性集
+     * @param rhs 右手边属性
+     * @param data 数据集
+     * @param cache PLI缓存
+     * @param strategy 采样策略
+     * @return 估计的G3错误率
+     */
     @Override
     public double estimateError(BitSet lhs, int rhs, DataSet data, PLICache cache, SamplingStrategy strategy) {
         // 1. 使用采样策略获取样本行索引集合。
@@ -197,5 +422,46 @@ public class G3Measure implements ErrorMeasure {
         
         // 根据G3定义，用 (总行数 - 1) 进行归一化。
         return estimatedTotalViolations / (data.getRowCount() - 1);
+    }
+    
+    // ==================== 性能优化辅助方法 ====================
+    
+    /**
+     * 获取缓存的RHS PLI，避免重复查询和转换
+     * @param rhs RHS列索引
+     * @param data 数据集
+     * @param cache PLI缓存
+     * @return RHS列的PLI
+     */
+    private PLI getCachedRhsPLI(int rhs, DataSet data, PLICache cache) {
+        if (cachedRhsPLI != null && cachedRhsColumn == rhs) {
+            return cachedRhsPLI;
+        }
+        
+        // 缓存未命中，重新获取
+        long rhsLong = LongBitSetUtils.setBit(0L, rhs);
+        BitSet rhsBitSet = LongBitSetUtils.longToBitSet(rhsLong, data.getColumnCount());
+        cachedRhsPLI = cache.getOrCalculatePLI(rhsBitSet);
+        cachedRhsColumn = rhs;
+        cachedRhsAttributeVector = cachedRhsPLI.toAttributeVector();
+        
+        return cachedRhsPLI;
+    }
+    
+    /**
+     * 获取缓存的RHS属性向量，避免重复转换
+     * @param rhs RHS列索引
+     * @param data 数据集
+     * @param cache PLI缓存
+     * @return RHS列的属性向量
+     */
+    private int[] getCachedRhsAttributeVector(int rhs, DataSet data, PLICache cache) {
+        if (cachedRhsAttributeVector != null && cachedRhsColumn == rhs) {
+            return cachedRhsAttributeVector;
+        }
+        
+        // 通过获取PLI同时更新缓存
+        getCachedRhsPLI(rhs, data, cache);
+        return cachedRhsAttributeVector;
     }
 }

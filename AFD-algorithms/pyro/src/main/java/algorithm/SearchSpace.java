@@ -20,8 +20,6 @@ import utils.MinMaxPair;
 import java.lang.ref.SoftReference;
 import java.util.*;
 
-import static utils.BitSetUtils.*;
-
 /**
  * @author Hoshi
  * @version 1.0
@@ -380,26 +378,14 @@ public class SearchSpace {
             return result;
         }
 
-        // 转换为BitSet进行HittingSet计算（暂时保持兼容）
-        List<BitSet> bitSetResult = new ArrayList<>();
-        for (long bits : result) {
-            BitSet bitSet = new BitSet();
-            for (int i = 0; i < dataSet.getColumnCount(); i++) {
-                if (LongBitSetUtils.testBit(bits, i)) {
-                    bitSet.set(i);
-                }
-            }
-            bitSetResult.add(bitSet);
-        }
+        // 使用long版本的HittingSet计算（性能优化）
+        HittingSet hittingSet = BitSetUtils.calculateHittingSet(result, dataSet.getColumnCount());
+        List<Long> minimalSets = hittingSet.getAllMinimalHittingSetsLong();
 
-        HittingSet hittingSet = calculateHittingSet(bitSetResult, dataSet.getColumnCount());
-        List<BitSet> minimalSets = hittingSet.getAllMinimalHittingSets();
-
-        // 转换回long并与launchpad合并
+        // 直接与launchpad合并，无需转换
         List<Long> finalResult = new ArrayList<>();
-        for (BitSet set : minimalSets) {
-            long setLong = BitSetUtils.bitSetToLong(set, dataSet.getColumnCount());
-            finalResult.add(LongBitSetUtils.union(setLong, launchpadLhs));
+        for (long set : minimalSets) {
+            finalResult.add(LongBitSetUtils.union(set, launchpadLhs));
         }
 
         return finalResult;
@@ -673,9 +659,7 @@ public class SearchSpace {
     private void validate(Node node) {
         timer.start("validate");
         if (node.isValidated()) return;
-        // 转换long为BitSet用于接口调用
-        BitSet lhsBitSet = longToBitSet(node.getLhs());
-        node.setError(measure.calculateError(lhsBitSet, rhs, dataSet, cache));
+        node.setError(measure.calculateError(node.getLhs(), rhs, dataSet, cache));
         node.setValidated();
         validateCount++;
         timer.end("validate");
@@ -683,23 +667,11 @@ public class SearchSpace {
 
     private void estimate(Node node) {
         if (node.isEstimated()) return;
-        // 转换long为BitSet用于接口调用
-        BitSet lhsBitSet = longToBitSet(node.getLhs());
+        // 直接使用long版本，避免BitSet转换开销
         if (samplingStrategy != null) {
-            samplingStrategy.initialize(dataSet, cache, lhsBitSet, rhs, sampleParam);
+            samplingStrategy.initialize(dataSet, cache, node.getLhs(), rhs, sampleParam);
         }
-        node.setError(measure.estimateError(lhsBitSet, rhs, dataSet, cache, samplingStrategy));
-    }
-
-    // 高效的long到BitSet转换方法
-    private BitSet longToBitSet(long bits) {
-        BitSet bitSet = new BitSet();
-        for (int i = 0; i < dataSet.getColumnCount(); i++) {
-            if ((bits & (1L << i)) != 0) {
-                bitSet.set(i);
-            }
-        }
-        return bitSet;
+        node.setError(measure.estimateError(node.getLhs(), rhs, dataSet, cache, samplingStrategy));
     }
 
     public List<FunctionalDependency> getValidatedFDs() {

@@ -3,15 +3,17 @@ package sampling;
 import model.DataSet;
 import pli.PLI;
 import pli.PLICache;
+import utils.LongBitSetUtils;
 
 import java.util.*;
 
 /**
- *  FocusedSampling - 聚焦采样策略
- *  通过PLI中的等价类簇进行分层采样，忽略单例元组
- * 
+ * FocusedSampling - 聚焦采样策略
+ * 通过PLI中的等价类簇进行分层采样，忽略单例元组
+ * 支持BitSet和long两种位集合表示，long版本性能更优
+ *
  * @author Hoshi
- * @version 1.0
+ * @version 2.0
  * @since 2025/2/26
  */
 public class FocusedSampling implements SamplingStrategy {
@@ -28,6 +30,59 @@ public class FocusedSampling implements SamplingStrategy {
         this.random = new Random();
     }
 
+    // ==================== 新的long版本方法（性能优化） ====================
+
+    /**
+     * 初始化聚焦采样策略（long版本，性能更优）
+     * 通过PLI中的等价类簇进行分层采样，忽略单例元组
+     *
+     * @param data 原始数据集
+     * @param cache PLI缓存
+     * @param lhs 左手边属性集（long表示，支持最多64列）
+     * @param rhs 右手边属性
+     * @param sampleParam 采样参数（可以是比例或固定数量）
+     */
+    @Override
+    public void initialize(DataSet data, PLICache cache, long lhs, int rhs, double sampleParam) {
+        int totalRows = data.getRowCount();
+
+        // 计算理论样本总数
+        if (sampleParam < 1) {
+            // 按比例采样
+            sampleSize = (int) (totalRows * sampleParam);
+            samplingInfo = "比例: " + sampleParam;
+        } else {
+            // 按固定数量采样
+            sampleSize = (int) Math.min(sampleParam, totalRows);
+            samplingInfo = "数量: " + sampleSize;
+        }
+
+        // 如果LHS为空或样本数为0，返回空集
+        if (LongBitSetUtils.isEmpty(lhs) || sampleSize == 0) {
+            sampleIndices = Collections.emptySet();
+            return;
+        }
+
+        // 步骤1：查找LHS的最佳子集PLI
+        BitSet lhsBitSet = LongBitSetUtils.longToBitSet(lhs, data.getColumnCount());
+        PLI subsetPli = cache.findBestCachedSubsetPli(lhsBitSet);
+
+        // 步骤2：按簇分组采样
+        sampleIndices = sampleByCluster(subsetPli, sampleSize);
+    }
+
+    // ==================== 原有BitSet版本方法（兼容性） ====================
+
+    /**
+     * 初始化聚焦采样策略（BitSet版本，兼容性方法）
+     * 通过PLI中的等价类簇进行分层采样，忽略单例元组
+     *
+     * @param data 原始数据集
+     * @param cache PLI缓存
+     * @param lhs 左手边属性集
+     * @param rhs 右手边属性
+     * @param sampleParam 采样参数（可以是比例或固定数量）
+     */
     @Override
     public void initialize(DataSet data, PLICache cache, BitSet lhs, int rhs, double sampleParam) {
         int totalRows = data.getRowCount();
